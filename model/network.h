@@ -2,7 +2,7 @@
 
 #define Q2_NN
 
-#define TRAININF
+#define TRAINING_ON
 
 struct Layer {
 	float* weightsBegin;
@@ -14,6 +14,13 @@ struct Layer {
 	float* biases() {return weightsBegin+(input*output*2);};
 	float* size() {return input*output;};
 	void forward(float* inputs);
+	#ifdef TRAINING_ON
+	float* previous_inputs;
+	float* gradients;
+	void backward(float* upstream_grad) {
+	
+	}
+	#endif
 }
 
 #endif
