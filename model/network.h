@@ -10,22 +10,33 @@ struct Layer {
 	float* current;
 	size_t input;
 	size_t output;
+	size_t size;
 	// Hooks allow customizability easily. deriv is for backward pass
 	HookFunc forwardHook;
 	HookFunc forwardHookDerivative;
 	float* quadratic() {return weightsBegin;};
-	float* inear() {return weightsBegin+(input*output);};
-	float* biases() {return weightsBegin+(input*output*2);};
-	float* size() {return input*output;};
-	void forward(float* inputs);
+	float* linear() {return weightsBegin+(size/3);};
+	float* biases() {return weightsBegin+(size/3*2);};
+
+	float* forward(float* inputs);
 	#ifdef TRAINING_ON
 	float* previous_inputs;
 	float* gradients;
 
-	void backward(float* upstream_grad) {
+	float* backward(float* upstream_grad) {
 	
 	}
 	#endif
+}
+
+struct LayerArgs {
+        int layerSize;
+        HookFunc hook;
+        hookFunc hookGrad;
+
+}
+void setupNeuralNetwork(std::vector<LayerArgs> layers, std::string weightsPath) (
+
 }
 
 #endif
