@@ -6,8 +6,8 @@
 #define TRAINING_ON
 #include <variant>
 typedef std::variant<struct Layer*, struct ParametricLayer*> LayerRef;
-typedef void (*HookFunc)(LayerRef layer, int batchSize, float* inputs, float* outputs, int count);
-typedef void (*HookDerivative)(LayerRef layer, int batchSize, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices);
+typedef void (*HookFunc)(LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count);
+typedef void (*HookDerivative)(LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices);
 extern bool setuped;
 extern int networkSize;
 extern int batchSize;
@@ -59,6 +59,7 @@ struct LayerArgs {
 	std::vector<HookDerivative> hookGrads;
 	LayerKind kind;
 	int outputsPerNeuron;
+	int weightsPerInput = 1;
 };
 void setupNeuralNetwork(std::vector<LayerArgs> layers, std::string weightsPath);
 #endif

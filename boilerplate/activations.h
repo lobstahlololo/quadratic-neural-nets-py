@@ -3,45 +3,60 @@
 #define ACTIVATIONS_IMPORTED
 #include "../model/network.h"
 #include <cmath>
-HookFunc ReLuHook = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count) {
+// utilities 
+
+HookFunc Residual = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
+	int total = count * batchSize;
+	for (int i = 0; i < total; ++i) {
+		outputs[i] = inputs[i] + layerInputs[i];
+	}
+};
+HookDerivative ResidualGradHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+	int total = count * batchSize;
+	for (int i = 0; i < total; ++i) {
+		outputs[i] = 1.0f;
+	}
+};
+
+HookFunc ReLuHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		outputs[i] = inputs[i] > 0.0f ? inputs[i] : 0.0f;
 	}
 };
-HookDerivative ReLuGradHook = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+HookDerivative ReLuGradHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		outputs[i] = inputs[i] > 0.0f ? 1.0f : 0.0f;
 	}
 };
-HookFunc SigmoidHook = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count) {
+HookFunc SigmoidHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		outputs[i] = 1.0f / (1.0f + std::exp(-inputs[i]));
 	}
 };
-HookDerivative SigmoidGradHook = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+HookDerivative SigmoidGradHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		float sig = 1.0f / (1.0f + std::exp(-inputs[i]));
 		outputs[i] = sig * (1.0f - sig);
 	}
 };
-HookFunc TanhHook = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count) {
+HookFunc TanhHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		outputs[i] = std::tanh(inputs[i]);
 	}
 };
-HookDerivative TanhGradHook = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+HookDerivative TanhGradHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		float t = std::tanh(inputs[i]);
 		outputs[i] = 1.0f - t * t;
 	}
 };
-HookFunc Softmax = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count) {
+HookFunc Softmax = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
 	for (int b = 0; b < batchSize; ++b) {
 		float* inp = inputs + b * count;
 		float* out = outputs + b * count;
@@ -60,7 +75,7 @@ HookFunc Softmax = [](LayerRef layer, int batchSize, float* inputs, float* outpu
 	}
 };
 
-HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* inputs, float* outputs, int count, const std::vector<int> correctIndices) {
+HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* layerInputs float* inputs, float* outputs, int count, const std::vector<int> correctIndices) {
 	// calculate Jacobian for correct indices only.
 	// note: in this case we must split inputs into batchSize / correctIndices.size() groups
 	int originalBatchSize = batchSize / correctIndices.size();
@@ -97,4 +112,3 @@ HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* inpu
 
 
 #endif
-
