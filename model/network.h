@@ -41,6 +41,7 @@ struct ParametricLayer {
 	float* weightsBegin;                                    size_t input;                                           size_t output;
         int batch;
         int outputsPerNeuron;
+        int weightsPerInput;
 	std::vector<HookFunc> forwardHooks;
 	std::vector<HookDerivative> forwardHookDerivatives;
 	float* forward(float* inputs, int tempBatchSize = 1);

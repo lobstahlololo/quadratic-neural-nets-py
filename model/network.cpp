@@ -172,8 +172,7 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 			maxBatch = std::max(maxBatch, currentBatch);
 			continue;
 		}
-		int multiplier = (args.kind == Parametric) ? args.weightsPerInput : args.outputsPerNeuron;
-		currentBatch *= multiplier;
+		currentBatch *= args.outputsPerNeuron;
 		maxBatch = std::max(maxBatch, currentBatch);
 		if (args.kind == Parametric) {
 			networkSize += prev->layerSize * args.weightsPerInput;
@@ -240,10 +239,9 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 				layer.weightsBegin = weightStart + accumulatedWeights;
 			}
 		}
-		int layerMultiplier = (layersAdd[i].kind == Parametric) ? layersAdd[i].weightsPerInput : layersAdd[i].outputsPerNeuron;
 		layer.batch = accumulatedBatch;
-		accumulatedBatch *= layerMultiplier;
-		size_t outputDataSize = layer.output * layer.batch * layerMultiplier;
+		accumulatedBatch *= layersAdd[i].outputsPerNeuron;
+		size_t outputDataSize = layer.output * layer.batch * layersAdd[i].outputsPerNeuron;
 		#ifdef TRAINING_ON
 		layer.previous_preacts = globalPreacts.data() + prevOutputOffset;
 		layer.gradients = globalGrads.data() + gradOffset;
