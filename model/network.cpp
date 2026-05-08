@@ -1,141 +1,263 @@
 #include <iostream>
-#include <network.h>
-#include <math.h>
+#include <fstream>
 #include <stdexcept>
+#include <algorithm>
+#include "network.h"
+#include "../math/math.h"
 
 
-float* Layer::forward(float* inputs) {
-#ifdef TRAINING_ON
-	previous_inputs = globalInput	
-#endif
-		// we cant rly validate inputs? so js wing it. but accessing out of poijter are concerning. hopefully should be fine enough.
-		if (size == 0) {
-			// input layer
-			float* begin = inputs
-				if (forwardHook == nullptr) {
-					return inputs;
-				}
-			for (int i = 0; i < output; ++i) {
-
-				*inputs = forwardHook(*inputs);       
-#ifdef TRAINING_ON  
-				*globalInput = *inputs;
-				++globalInput; 
-#endif
-				++inputs;
-			}
-
-			return begin;
-		}
-
-	for (int i = 0; i < input; ++i) {
-		allocatedSquaredInputs[i] = *(inputs+i) * *(inputs+i);
-	}
-	//	vector<float> fullOutput(output); //
-	//	vector<float> quadOutput(output);
-	//linear() till bias = input*output
-
-	matmult(linear(), inputs, *allocatedOutputs.first, output, input, 1);
-	// ratio lineOSERS, go deal with your O(
-	// ratio lineOSERS, go deal with your O(
-	matmult(quadratic(), *allocatedSquaredInputs, *allocatedOutputs.second, output, input, 1);
-	//modify inplace, i domt wannna alloc
-	// we prolly couldve matmulted on *fullOutput twice but idk
-	for (int i = 0; i < output; ++i) {
-		allocatedOutputs.first[i] += allocatedOutputs.second[i] + *(biases() + i);
-	}
-	if (forwardHook) {
-		for (int i = 0; i < output; ++i) {                      allocatedOutputs.first[i] = forwardHook(alllocatedOutputs.first[i]);
-		}
-	}
-#ifdef TRAINING_ON
-	for (float val : allocatedOutputs.first) {
-		*globalInput = val;
-		++globalInput;
-#endif
-	}	
-}
-
-return *allocatedOutputs.first;
-
-
-
-
-}
-
-#ifdef TRAINING_ON
-float* globalInput;
-vector<float> globalInputs;
-// forward = activation(ax²+bx¹+c). deriv via poeer rule = deriv of aftive * 2ax+b.
-
-void Layer::backward(float* upstream_grad) {
-
-}
-#endif
-pair<std::vector<float>,std::vector<float>> allocatedOutputs;
-std::vector<float> allocatedSquaredInputs
-
+bool setuped = false;
+int batchSize = 1;
+int networkSize = 0;
+std::pair<std::vector<float>, std::vector<float>> allocatedOutputs;
+std::vector<float> allocatedSquaredInputs;
 std::vector<float> weights;
 std::vector<Layer> layers;
-std::vector<int> perLayerSize
+std::vector<int> perLayerSize;
+float activationBuffer[16834]; // buffer for activation functions. covers d model up to 16k dimensions.
+#ifdef TRAINING_ON
+std::vector<float> globalInputs;
+std::vector<float> globalPreacts;
+std::vector<float> globalGrads;
 
+#endif
+float* Layer::forward(float* inputs, int tempBatchSize) {
+	int effectiveBatch = batch * tempBatchSize;
+	if (size == 0) {
+		#ifdef TRAINING_ON
+		previous_inputs = inputs;
+		previous_preacts = inputs;
+		#endif
+		if (forwardHooks.empty()) {
+			return inputs;
+		}
+		LayerRef self(this);
+		std::copy(inputs, inputs + output * effectiveBatch, allocatedOutputs.second.data());
+		for (auto& hook : forwardHooks) {
+			hook(self, effectiveBatch, allocatedOutputs.second.data(), allocatedOutputs.second.data(), output);
+		}
+		std::copy(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, allocatedOutputs.first.data());
+		if (output_ptr) {
+			std::copy(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, output_ptr);
+		}
+		std::fill(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, 0.0f);
+		return allocatedOutputs.first.data();
+	}
 
-void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, s
-		td::string weightsPath = "UNDEFINED276lineosersyoujelly?") {
+	float* in_ptr = inputs;
+	for (std::size_t i = 0; i < input * effectiveBatch; ++i) {
+		allocatedSquaredInputs[i] = in_ptr[i] * in_ptr[i];
+	}
+
+	matmult(linear(), inputs, allocatedOutputs.second.data(), output, input, effectiveBatch);
+	matmult(quadratic(), allocatedSquaredInputs.data(), allocatedOutputs.second.data(), output, input, effectiveBatch);
+	for (std::size_t i = 0; i < output * effectiveBatch; ++i) {
+		allocatedOutputs.second[i] += biases()[i % output];
+	}
+	if (!forwardHooks.empty()) {
+		LayerRef self(this);
+		std::copy(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, previous_preacts);
+		for (auto& hook : forwardHooks) {
+			hook(self, effectiveBatch, allocatedOutputs.second.data(), allocatedOutputs.second.data(), output);
+		}
+	}
+	#ifdef TRAINING_ON
+	std::copy(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, output_ptr);
+	#endif
+	std::copy(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, allocatedOutputs.first.data());
+	std::fill(allocatedOutputs.second.data(), allocatedOutputs.second.data() + output * effectiveBatch, 0.0f);
+	return allocatedOutputs.first.data();
+}
+
+float* ParametricLayer::forward(float* inputs, int tempBatchSize) {
+	int effectiveBatch = batch * tempBatchSize;
+	if (forwardHooks.empty()) {
+		return inputs;
+	}
+	LayerRef self(this);
+		std::copy(inputs, inputs + input * effectiveBatch, allocatedOutputs.first.data());
+		for (auto& hook : forwardHooks) {
+			hook(self, effectiveBatch, allocatedOutputs.first.data(), allocatedOutputs.first.data(), input);
+		}
+		if (output_ptr) {
+			std::copy(allocatedOutputs.first.data(), allocatedOutputs.first.data() + input * effectiveBatch, output_ptr);
+		}
+		return allocatedOutputs.first.data();
+}
+#ifdef TRAINING_ON
+float* Layer::backward(float* upstream_grad, const std::vector<int>& correctIndices, int tempBatchSize) {
+	int effectiveBatch = tempBatchSize;
+	if (!forwardHookDerivatives.empty()) {
+		LayerRef self(this);
+		for (auto& derivHook : forwardHookDerivatives) {
+			derivHook(self, effectiveBatch, previous_preacts, activationBuffer, output, correctIndices);
+			for (size_t i = 0; i < output * effectiveBatch; ++i) {
+				upstream_grad[i] *= activationBuffer[i];
+			}
+		}
+	}
+
+	size_t totalWeights = weightCount();
+	size_t bias_offset = totalWeights;
+	std::fill(gradients + bias_offset, gradients + size, 0.0f);
+	for (size_t b = 0; b < effectiveBatch; ++b) {
+		for (size_t n = 0; n < neurons; ++n) {
+			gradients[bias_offset + n] += upstream_grad[b * neurons + n];
+		}
+	}
+
+	float* outputData = allocatedOutputs.first.data();
+	float* scratchData = allocatedOutputs.second.data();
+
+	matmult(upstream_grad, previous_inputs, gradients, output, effectiveBatch, input);
+	matmult(upstream_grad, allocatedSquaredInputs.data(), gradients + input * output, output, effectiveBatch, input);
+
+	matmult(upstream_grad, linear(), scratchData, effectiveBatch, output, input);
+	for (size_t i = 0; i < input * effectiveBatch; ++i) {
+		outputData[i] = scratchData[i];
+		scratchData[i] = 0.0f;
+	}
+
+	matmult(upstream_grad, quadratic(), scratchData, effectiveBatch, output, input);
+	for (size_t i = 0; i < input * effectiveBatch; ++i) {
+		outputData[i] += 2.0f * previous_inputs[i] * scratchData[i];
+	}
+
+	return outputData;
+}
+float* ParametricLayer::backward(float* upstream_grad, const std::vector<int>& correctIndices, int tempBatchSize) {
+	int effectiveBatch = tempBatchSize;
+	size_t weight_count = input * outputsPerNeuron;
+	std::fill(gradients, gradients + weight_count, 0.0f);
+	if (!forwardHookDerivatives.empty()) {
+		LayerRef self(this);
+		for (auto& derivHook : forwardHookDerivatives) {
+			derivHook(self, effectiveBatch, previous_inputs, activationBuffer, input, correctIndices);
+			for (size_t i = 0; i < input * effectiveBatch; ++i) {
+				upstream_grad[i] *= activationBuffer[i];
+			}
+		}
+	}
+	for (size_t i = 0; i < input * effectiveBatch; ++i) {
+		size_t f = i % input;
+		for (size_t j = 0; j < outputsPerNeuron; ++j) {
+			gradients[f * outputsPerNeuron + j] += upstream_grad[i * outputsPerNeuron + j];
+		}
+	}
+	for (size_t i = 0; i < input * effectiveBatch * outputsPerNeuron; ++i) {
+		allocatedOutputs.first[i] = upstream_grad[i];
+	}
+	return allocatedOutputs.first.data();
+}
+#endif
+void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPath) {
+	// rely on callrr to chrck setuped
 	layers.clear();
 	weights.clear();
-	int size = 0;
-	// ptobably we csn optimise this but idk
+	perLayerSize.clear();
 	int maxNeurons = 0;
-	LayerArgs& prev;
-
-	for (Layer& layer : layersAdd) {
-		maxNeurons = max(maxNeurons, layer.layerSize)
-			if (prev == nullptr) {
-				perLayerSize.push_back(0);
-				prev = layer;
-				continue;
-			}
-		size += layer.layerSize + layer.layerSize * prev.layerSize * 2 // for quadratic, linear and bias
-			perLayerSize.push_back(layer.layerSize)
-
-			prev = layer
+	networkSize = 0;
+	int currentBatch = batchSize;
+	int maxBatch = batchSize;
+	int maxBufferSize = 0;
+	LayerArgs* prev = nullptr;
+	for (auto& args : layersAdd) {
+		maxNeurons = std::max(maxNeurons, args.layerSize);
+		int layerBatch = currentBatch;
+		maxBufferSize = std::max(maxBufferSize, args.layerSize * layerBatch);
+		if (prev == nullptr) {
+			perLayerSize.push_back(args.layerSize);
+			prev = &args;
+			currentBatch *= args.outputsPerNeuron;
+			maxBatch = std::max(maxBatch, currentBatch);
+			continue;
+		}
+		currentBatch *= args.outputsPerNeuron;
+		maxBatch = std::max(maxBatch, currentBatch);
+		if (args.kind == Parametric) {
+			networkSize += prev->layerSize * args.outputsPerNeuron;
+		} else {
+			networkSize += args.layerSize + args.layerSize * prev->layerSize * 2 * args.outputsPerNeuron;
+		}
+		perLayerSize.push_back(args.layerSize);
+		prev = &args;
 	}
-	allocatedOutputs.first.resize(maxNeurons);
-	allocatedOutputs.second.resize(maxNeurons);
-	allocatedSquaredInputs.resize(maxNeurons);
-
-
-	if (weightsPath == "UNDEFINED2763lineosersyoujelly?") {
-		weights.resize(size);
+	auto resizeBuffers = [&](size_t size) {
+		allocatedOutputs.first.resize(size);
+		allocatedOutputs.second.resize(size);
+		allocatedSquaredInputs.resize(size);
+	};
+	resizeBuffers(maxBufferSize);
+	#ifdef TRAINING_ON
+	globalInputs.resize(maxNeurons * maxNeurons * maxBatch);
+	globalPreacts.resize(maxNeurons * maxNeurons * maxBatch);
+	globalGrads.resize(networkSize);
+	#endif
+	if (weightsPath == "UNDEFINED276lineosersyoujelly?") {
+		weights.resize(networkSize);
 	} else {
-
-		FILE* f = fopen(weightsPath, "rb");
-		if (f == null) {
+		std::ifstream file(weightsPath, std::ios::binary);
+		if (!file) {
 			throw std::runtime_error("wrong filepath");
-			return;
 		}
-		fseek(f, 0, SEEK_END);
-		long fileSize = ftell(file);
-		fseek(file, 0, SEEK_SET);   
-		// prob shouldnt *3
-		if (fileSize != size) {
+		file.seekg(0, std::ios::end);
+		std::streampos fileSize = file.tellg();
+		file.seekg(0, std::ios::beg);
+		if (static_cast<long>(networkSize * sizeof(float)) != fileSize) {
 			throw std::runtime_error("wrong file size relation to weights");
-			return;
 		}
-
-		fread(weights, sizeof(float), size, f);
-		// idt we need to catch an exception bc we djd b4
+		weights.resize(networkSize);
+		file.read(reinterpret_cast<char*>(weights.data()), networkSize * sizeof(float));
 	}
-	int accumulatedSize = 0;
-	float* start = &weights[0];
-	for (int i = 0; i < layersAdd.size(); ++i) {
-		if (i== 0) {
-			layers.push_back({start, start, layersAdd[i].size, layersAdd[i].size, 0, layersAdd[i].size, layersAdd[i].hook, layersAdd[i].hookGrad});
+	float* weightStart = weights.data();
+	std::size_t prevOutputOffset = 0;
+	std::size_t accumulatedWeights = 0;
+	std::size_t gradOffset = 0;
+	int accumulatedBatch = batchSize;
+	for (std::size_t i = 0; i < layersAdd.size(); ++i) {
+		Layer layer;
+		for (auto& h : layersAdd[i].hooks) {
+			layer.forwardHooks.push_back(h);
 		}
-		accumulatedSize += perLayerSize[i];
-		float* begin = start + accumulatedSize;
-		layers.push_back({begin, begin, layersAdd[i-1].size, layersAdd[i].size, layersAdd[i].size + layersAdd[i].size * layersAdd[i-1].size * 2, layersAdd[i].size, layersAdd[i].hook, layersAdd[i].hookGrad});
-	} 
-
+		for (auto& hd : layersAdd[i].hookGrads) {
+			layer.forwardHookDerivatives.push_back(hd);
+		}
+		layer.neurons = layersAdd[i].layerSize;
+		if (i == 0) {
+			layer.input = layersAdd[i].layerSize;
+			layer.output = layersAdd[i].layerSize;
+			layer.size = 0;
+			layer.weightsBegin = weightStart;
+		} else {
+			layer.input = layersAdd[i-1].layerSize;
+			layer.output = layersAdd[i].layerSize;
+			if (layersAdd[i].kind == Parametric) {
+				layer.size = layer.input * layersAdd[i].outputsPerNeuron;
+				layer.weightsBegin = weightStart + accumulatedWeights;
+			} else {
+				layer.size = layersAdd[i].layerSize + layersAdd[i].layerSize * layersAdd[i-1].layerSize * 2 * layersAdd[i].outputsPerNeuron;
+				layer.weightsBegin = weightStart + accumulatedWeights;
+			}
+		}
+		layer.batch = accumulatedBatch;
+		accumulatedBatch *= layersAdd[i].outputsPerNeuron;
+		size_t outputDataSize = layer.output * layer.batch * layersAdd[i].outputsPerNeuron;
+		#ifdef TRAINING_ON
+		layer.previous_preacts = globalPreacts.data() + prevOutputOffset;
+		layer.gradients = globalGrads.data() + gradOffset;
+		layer.output_ptr = globalInputs.data() + prevOutputOffset;
+		if (i > 0) {
+			layer.previous_inputs = layers.back().output_ptr;
+		} else {
+			layer.previous_inputs = nullptr;
+		}
+		#endif
+		layers.push_back(layer);
+		prevOutputOffset += outputDataSize;
+		if (i > 0) {
+			gradOffset += layer.size;
+			accumulatedWeights += layer.size;
+		}
+	}
+	setuped = true;
 }
