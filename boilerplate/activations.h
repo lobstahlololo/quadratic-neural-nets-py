@@ -11,12 +11,154 @@ HookFunc Residual = [](LayerRef layer, int batchSize, float* layerInputs, float*
 		outputs[i] = inputs[i] + layerInputs[i];
 	}
 };
+
+
 HookDerivative ResidualGradHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
 	int total = count * batchSize;
 	for (int i = 0; i < total; ++i) {
 		outputs[i] = 1.0f;
 	}
 };
+
+HookFunc NonLearnableLayerNorm = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
+	for (int b = 0; b < batchSize; ++b) {
+		float* inp = inputs + b * count;
+		float* out = outputs + b * count;
+		float mean = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			mean += inp[i];
+		}
+		mean /= count;
+		float variance = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			variance += (inp[i] - mean) * (inp[i] - mean);
+		}
+		variance /= count;
+		float invStdDev = 1.0f / std::sqrt(variance + 1e-5f);
+		for (int i = 0; i < count; ++i) {
+			out[i] = (inp[i] - mean) * invStdDev;
+		}
+	}
+};
+
+HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+	for (int b = 0; b < batchSize; ++b) {
+		float* inp = inputs + b * count;
+		float* out = outputs + b * count;
+		float mean = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			mean += inp[i];
+		}
+		mean /= count;
+		float variance = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			variance += (inp[i] - mean) * (inp[i] - mean);
+		}
+		variance /= count;
+		float invStdDev = 1.0f / std::sqrt(variance + 1e-5f);
+		for (int i = 0; i < count; ++i) {
+			outputs[b * count + i] = invStdDev * (1.0f - 1.0f / count);
+		}
+	}
+};
+
+HookFunc LearnableLayerNorm = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
+	float* gamma = layer.weightsBegin;
+	float* beta = layer.weightsBegin + layer.input;
+	for (int b = 0; b < batchSize; ++b) {
+		float* inp = inputs + b * count;
+		float* out = outputs + b * count;
+		float mean = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			mean += inp[i];
+		}
+		mean /= count;
+		float variance = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			variance += (inp[i] - mean) * (inp[i] - mean);
+		}
+		variance /= count;
+		float invStdDev = 1.0f / std::sqrt(variance + 1e-5f);
+		for (int i = 0; i < count; ++i) {
+			out[i] = (inp[i] - mean) * invStdDev * gamma[i] + beta[i];
+		}
+	}
+};
+
+HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+	float* gamma = layer.weightsBegin;
+	int total = count * batchSize;
+	std::vector<float> current(inputs, inputs + total);
+	for (auto& hook : layer.forwardHooks) {
+		if (hook == LearnableLayerNorm) break;
+		std::vector<float> temp(total);
+		hook(layer, batchSize, layerInputs, current.data(), temp.data(), count);
+		current.swap(temp);
+	}
+	for (int b = 0; b < batchSize; ++b) {
+		float* curr = current.data() + b * count;
+		float* out = outputs + b * count;
+		float mean = 0.0f;
+		for (int i = 0; i < count; ++i) mean += curr[i];
+		mean /= count;
+		float var = 0.0f;
+		for (int i = 0; i < count; ++i) var += (curr[i] - mean) * (curr[i] - mean);
+		var /= count;
+		float invStd = 1.0f / std::sqrt(var + 1e-5f);
+		for (int i = 0; i < count; ++i) {
+			out[i] = invStd * gamma[i] * (1.0f - 1.0f / count);
+		}
+	}
+};
+
+HookFunc RMSNorm = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
+	float* gamma = layer.weightsBegin;
+	for (int b = 0; b < batchSize; ++b) {
+		float* inp = inputs + b * count;
+		float* out = outputs + b * count;
+		float rms = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			rms += inp[i] * inp[i];
+		}
+		rms = std::sqrt(rms / count + 1e-5f);
+		float invRms = 1.0f / rms;
+		for (int i = 0; i < count; ++i) {
+			out[i] = inp[i] * invRms * gamma[i];
+		}
+	}
+};
+
+HookDerivative RMSNormDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+	float* gamma = layer.weightsBegin;
+	int total = count * batchSize;
+	std::vector<float> current(inputs, inputs + total);
+	for (auto& hook : layer.forwardHooks) {
+		if (hook == RMSNorm) break;
+		std::vector<float> temp(total);
+		hook(layer, batchSize, layerInputs, current.data(), temp.data(), count);
+		current.swap(temp);
+	}
+	for (int b = 0; b < batchSize; ++b) {
+		float* curr = current.data() + b * count;
+		float* out = outputs + b * count;
+		float rms = 0.0f;
+		for (int i = 0; i < count; ++i) {
+			rms += curr[i] * curr[i];
+		}
+		rms = std::sqrt(rms / count + 1e-5f);
+		float invRms = 1.0f / rms;
+		float invRmsCubedDivCount = invRms * invRms * invRms / count;
+		for (int i = 0; i < count; ++i) {
+			float sumTerm = 0.0f;
+			for (int j = 0; j < count; ++j) {
+				sumTerm += curr[j] * curr[j] * gamma[j];
+			}
+			out[i] = gamma[i] * invRms - curr[i] * invRmsCubedDivCount * sumTerm;
+		}
+	}
+};
+
+// activations
 
 HookFunc ReLuHook = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
 	int total = count * batchSize;
@@ -75,12 +217,9 @@ HookFunc Softmax = [](LayerRef layer, int batchSize, float* layerInputs, float* 
 	}
 };
 
-HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* layerInputs float* inputs, float* outputs, int count, const std::vector<int> correctIndices) {
-	// calculate Jacobian for correct indices only.
-	// note: in this case we must split inputs into batchSize / correctIndices.size() groups
+HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
 	int originalBatchSize = batchSize / correctIndices.size();
-	// previous softMaxes
-	vector<float> softMaxes(batchSize * count);
+	std::vector<float> softMaxes(batchSize * count);
 	for (int i = 0; i < batchSize; ++i) {
 		float* inp = inputs + i * count;
 		float* out = softMaxes.data() + i * count;		float maximum = 0.0f;
