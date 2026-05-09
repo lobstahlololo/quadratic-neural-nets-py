@@ -12,9 +12,10 @@ int networkSize = 0;
 std::pair<std::vector<float>, std::vector<float>> allocatedOutputs;
 std::vector<float> allocatedSquaredInputs;
 std::vector<float> weights;
+std::vector<float> globalScratch;
 std::vector<Layer> layers;
 std::vector<int> perLayerSize;
-float activationBuffer[16834]; // buffer for activation functions. covers d model up to 16k dimensions.
+float activationBuffer[16834];
 #ifdef TRAINING_ON
 std::vector<float> globalInputs;
 std::vector<float> globalPreacts;
@@ -138,10 +139,12 @@ float* ParametricLayer::backward(float* upstream_grad, const std::vector<int>& c
 			}
 		}
 	}
-	for (size_t i = 0; i < input * effectiveBatch; ++i) {
-		size_t f = i % input;
-		for (size_t j = 0; j < weightsPerInput; ++j) {
-			gradients[f * weightsPerInput + j] += upstream_grad[i * weightsPerInput + j];
+	if (scratchSize == 0) {
+		for (size_t i = 0; i < input * effectiveBatch; ++i) {
+			size_t f = i % input;
+			for (size_t j = 0; j < weightsPerInput; ++j) {
+				gradients[f * weightsPerInput + j] += upstream_grad[i * weightsPerInput + j];
+			}
 		}
 	}
 	for (size_t i = 0; i < input * effectiveBatch * weightsPerInput; ++i) {
@@ -188,6 +191,9 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 		allocatedSquaredInputs.resize(size);
 	};
 	resizeBuffers(maxBufferSize);
+	size_t totalScratch = 0;
+	for (auto& args : layersAdd) totalScratch += args.scratchSize;
+	globalScratch.resize(totalScratch);
 	#ifdef TRAINING_ON
 	globalInputs.resize(maxNeurons * maxNeurons * maxBatch);
 	globalPreacts.resize(maxNeurons * maxNeurons * maxBatch);
@@ -208,11 +214,11 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 		}
 		weights.resize(networkSize);
 		file.read(reinterpret_cast<char*>(weights.data()), networkSize * sizeof(float));
-	}
 	float* weightStart = weights.data();
 	std::size_t prevOutputOffset = 0;
 	std::size_t accumulatedWeights = 0;
 	std::size_t gradOffset = 0;
+	std::size_t scratchOffset = 0;
 	int accumulatedBatch = batchSize;
 	for (std::size_t i = 0; i < layersAdd.size(); ++i) {
 		Layer layer;
@@ -242,6 +248,9 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 		layer.batch = accumulatedBatch;
 		accumulatedBatch *= layersAdd[i].outputsPerNeuron;
 		size_t outputDataSize = layer.output * layer.batch * layersAdd[i].outputsPerNeuron;
+		layer.scratchSize = layersAdd[i].scratchSize;
+		layer.scratchPad = layer.scratchSize > 0 ? globalScratch.data() + scratchOffset : nullptr;
+		scratchOffset += layer.scratchSize;
 		#ifdef TRAINING_ON
 		layer.previous_preacts = globalPreacts.data() + prevOutputOffset;
 		layer.gradients = globalGrads.data() + gradOffset;
@@ -256,6 +265,10 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 		prevOutputOffset += outputDataSize;
 		if (i > 0) {
 			gradOffset += layer.size;
+			accumulatedWeights += layer.size;
+		}
+	}
+	setuped = true;
 			accumulatedWeights += layer.size;
 		}
 	}

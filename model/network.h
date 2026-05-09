@@ -21,6 +21,8 @@ struct Layer {
 	size_t neurons;
 	int outputsPerNeuron;
 	int batch;
+	float* scratchPad;
+	int scratchSize;
 	std::vector<HookFunc> forwardHooks;
 	std::vector<HookDerivative> forwardHookDerivatives;
 	float* quadratic() { return weightsBegin; }
@@ -38,10 +40,14 @@ struct Layer {
 };
 
 struct ParametricLayer {
-	float* weightsBegin;                                    size_t input;                                           size_t output;
-        int batch;
-        int outputsPerNeuron;
-        int weightsPerInput;
+	float* weightsBegin;
+	size_t input;
+	size_t output;
+	int batch;
+	int outputsPerNeuron;
+	int weightsPerInput;
+	float* scratchPad;
+	int scratchSize;
 	std::vector<HookFunc> forwardHooks;
 	std::vector<HookDerivative> forwardHookDerivatives;
 	float* forward(float* inputs, int tempBatchSize = 1);
@@ -61,6 +67,7 @@ struct LayerArgs {
 	LayerKind kind;
 	int outputsPerNeuron;
 	int weightsPerInput = 1;
+	int scratchSize = 0;
 };
 void setupNeuralNetwork(std::vector<LayerArgs> layers, std::string weightsPath);
 #endif
