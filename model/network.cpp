@@ -214,6 +214,7 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 		}
 		weights.resize(networkSize);
 		file.read(reinterpret_cast<char*>(weights.data()), networkSize * sizeof(float));
+	}
 	float* weightStart = weights.data();
 	std::size_t prevOutputOffset = 0;
 	std::size_t accumulatedWeights = 0;
@@ -265,10 +266,6 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weightsPat
 		prevOutputOffset += outputDataSize;
 		if (i > 0) {
 			gradOffset += layer.size;
-			accumulatedWeights += layer.size;
-		}
-	}
-	setuped = true;
 			accumulatedWeights += layer.size;
 		}
 	}

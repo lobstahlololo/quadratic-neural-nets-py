@@ -222,7 +222,7 @@ HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* laye
 	std::vector<float> softMaxes(batchSize * count);
 	for (int i = 0; i < batchSize; ++i) {
 		float* inp = inputs + i * count;
-		float* out = softMaxes.data() + i * count;		float maximum = 0.0f;
+		float* out = softMaxes.data() + i * count; float maximum = 0.0f;
 		for (int j = 0; j < count; ++j) {
 			maximum = std::max(maximum, inp[j]);
 		}
@@ -237,31 +237,34 @@ HookDerivative SoftmaxDerivative = [](LayerRef layer, int batchSize, float* laye
 
 	for (int i = 0; i < correctIndices.size(); ++i) {
 		int idx = correctIndices[i];
-	for (int b = 0; b <  originalBatchSize; ++b) {
-		float* inp  = softMaxes.data() + (i * originalBatchSize + b) * count;
-		for (int j = 0; j < count; ++j) {
-			if (j == idx) {
-				outputs[(i * originalBatchSize + b) * count + j] = inp[j] * (1.0f - inp[j]);
-			} else {
-				outputs[(i * originalBatchSize + b) * count + j] = -inp[j] * inp[idx];
+		for (int b = 0; b <  originalBatchSize; ++b) {
+			float* inp  = softMaxes.data() + (i * originalBatchSize + b) * count;
+			for (int j = 0; j < count; ++j) {
+				if (j == idx) {
+					outputs[(i * originalBatchSize + b) * count + j] = inp[j] * (1.0f - inp[j]);
+				} else {
+					outputs[(i * originalBatchSize + b) * count + j] = -inp[j] * inp[idx];
+				}
 			}
 		}
 	}
 };
 
 HookFunc EmbeddingForward = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
+	ParametricLayer* l = std::get<ParametricLayer*>(layer);
 	int embeddingDim = count;
 	for (int i = 0; i < batchSize; ++i) {
 		int idx = static_cast<int>(inputs[i]);
-		float* weightRow = layer.weightsBegin + idx * embeddingDim;
+		float* weightRow = l->weightsBegin + idx * embeddingDim;
 		float* outRow = outputs + i * embeddingDim;
 		for (int j = 0; j < embeddingDim; ++j) outRow[j] = weightRow[j];
 	}
 };
 
 HookDerivative EmbeddingDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+	ParametricLayer* l = std::get<ParametricLayer*>(layer);
 	int embeddingDim = count;
-	float* gradients = layer.gradients;
+	float* gradients = l->gradients;
 	for (int i = 0; i < batchSize; ++i) {
 		int idx = static_cast<int>(layerInputs[i]);
 		float* gradRow = gradients + idx * embeddingDim;
@@ -272,9 +275,10 @@ HookDerivative EmbeddingDerivative = [](LayerRef layer, int batchSize, float* la
 };
 
 HookFunc AttentionForward = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
+	ParametricLayer* l = std::get<ParametricLayer*>(layer);
 	int d_model = count;
 	int N = batchSize;
-	float* W = layer.weightsBegin;
+	float* W = l->weightsBegin;
 	float* QW = W;
 	float* KW = W + d_model * d_model;
 	float* VW = W + 2 * d_model * d_model;
@@ -285,7 +289,7 @@ HookFunc AttentionForward = [](LayerRef layer, int batchSize, float* layerInputs
 	matmult(inputs, KW, K, N, d_model, d_model);
 	matmult(inputs, VW, V, N, d_model, d_model);
 	float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-	float* scores = layer.scratchPad;
+	float* scores = l->scratchPad;
 	for (int i = 0; i < N; ++i) {
 		for (int j = 0; j < N; ++j) {
 			float dot = 0.0f;
@@ -313,10 +317,11 @@ HookFunc AttentionForward = [](LayerRef layer, int batchSize, float* layerInputs
 };
 
 HookDerivative AttentionDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
+	ParametricLayer* l = std::get<ParametricLayer*>(layer);
 	int d_model = count;
 	int N = batchSize;
 	float* X = layerInputs;
-	float* W = layer.weightsBegin;
+	float* W = l->weightsBegin;
 	float* QW = W;
 	float* KW = W + d_model * d_model;
 	float* VW = W + 2 * d_model * d_model;
@@ -327,7 +332,7 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batchSize, float* la
 	matmult(X, KW, K, N, d_model, d_model);
 	matmult(X, VW, V, N, d_model, d_model);
 	float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-	float* scores = layer.scratchPad;
+	float* scores = l->scratchPad;
 	float* dY = inputs;
 	float* dV = new float[N * d_model];
 	for (int j = 0; j < N; ++j) {
@@ -381,7 +386,7 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batchSize, float* la
 			dWV[i * d_model + j] = gV;
 		}
 	}
-	float* grads = layer.gradients;
+	float* grads = l->gradients;
 	for (int i = 0; i < d_model * d_model; ++i) grads[i] += dWQ[i];
 	for (int i = 0; i < d_model * d_model; ++i) grads[d_model * d_model + i] += dWK[i];
 	for (int i = 0; i < d_model * d_model; ++i) grads[2 * d_model * d_model + i] += dWV[i];
