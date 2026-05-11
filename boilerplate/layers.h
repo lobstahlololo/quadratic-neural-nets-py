@@ -53,7 +53,7 @@ inline LayerArgs AttentionLayer(int d_model, int batch_tokens) {
 	args.weightsPerInput = 3 * d_model;
 	args.hooks = { AttentionForward };
 	args.hookGrads = { AttentionDerivative };
-	args.scratchSize = batch_tokens * batch_tokens;
+	args.scratchSize = 2 * batch_tokens * batch_tokens + 3 * batch_tokens * d_model;
 	return args;
 }
 inline LayerArgs FFNLayer(int d_model, int hidden_dim, HookFunc activation, HookDerivative activationDeriv) {

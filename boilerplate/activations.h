@@ -282,21 +282,15 @@ HookFunc AttentionForward = [](LayerRef layer, int batchSize, float* layerInputs
 	float* QW = W;
 	float* KW = W + d_model * d_model;
 	float* VW = W + 2 * d_model * d_model;
-	float* Q = new float[N * d_model];
-	float* K = new float[N * d_model];
-	float* V = new float[N * d_model];
-	matmult(inputs, QW, Q, N, d_model, d_model);
-	matmult(inputs, KW, K, N, d_model, d_model);
-	matmult(inputs, VW, V, N, d_model, d_model);
+	float* Q = l->scratchPad;
+	float* K = Q + N * d_model;
+	float* V = K + N * d_model;
+	float* scores = V + N * d_model;
+	matmult(inputs, QW, Q, N, d_model, d_model, false, false, 1.0f, 0.0f);
+	matmult(inputs, KW, K, N, d_model, d_model, false, false, 1.0f, 0.0f);
+	matmult(inputs, VW, V, N, d_model, d_model, false, false, 1.0f, 0.0f);
 	float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-	float* scores = l->scratchPad;
-	for (int i = 0; i < N; ++i) {
-		for (int j = 0; j < N; ++j) {
-			float dot = 0.0f;
-			for (int k = 0; k < d_model; ++k) dot += Q[i * d_model + k] * K[j * d_model + k];
-			scores[i * N + j] = dot * scale;
-		}
-	}
+	matmult(Q, K, scores, N, d_model, N, false, true, scale, 0.0f);
 	for (int i = 0; i < N; ++i) {
 		float maxVal = scores[i * N];
 		for (int j = 1; j < N; ++j) if (scores[i * N + j] > maxVal) maxVal = scores[i * N + j];
@@ -304,16 +298,7 @@ HookFunc AttentionForward = [](LayerRef layer, int batchSize, float* layerInputs
 		for (int j = 0; j < N; ++j) sumExp += std::exp(scores[i * N + j] - maxVal);
 		for (int j = 0; j < N; ++j) scores[i * N + j] = std::exp(scores[i * N + j] - maxVal) / sumExp;
 	}
-	for (int i = 0; i < N; ++i) {
-		for (int k = 0; k < d_model; ++k) {
-			float val = 0.0f;
-			for (int j = 0; j < N; ++j) val += scores[i * N + j] * V[j * d_model + k];
-			outputs[i * d_model + k] = val;
-		}
-	}
-	delete[] Q;
-	delete[] K;
-	delete[] V;
+	matmult(scores, V, outputs, N, N, d_model, false, false, 1.0f, 0.0f);
 };
 
 HookDerivative AttentionDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
@@ -325,87 +310,36 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batchSize, float* la
 	float* QW = W;
 	float* KW = W + d_model * d_model;
 	float* VW = W + 2 * d_model * d_model;
-	float* Q = new float[N * d_model];
-	float* K = new float[N * d_model];
-	float* V = new float[N * d_model];
-	matmult(X, QW, Q, N, d_model, d_model);
-	matmult(X, KW, K, N, d_model, d_model);
-	matmult(X, VW, V, N, d_model, d_model);
+	float* Q = l->scratchPad;
+	float* K = Q + N * d_model;
+	float* V_reuse = K + N * d_model;
+	float* scores = V_reuse + N * d_model;
+	float* dScores_dZ = scores + N * N;
+	matmult(X, QW, Q, N, d_model, d_model, false, false, 1.0f, 0.0f);
+	matmult(X, KW, K, N, d_model, d_model, false, false, 1.0f, 0.0f);
+	matmult(X, VW, V_reuse, N, d_model, d_model, false, false, 1.0f, 0.0f);
 	float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-	float* scores = l->scratchPad;
+	matmult(Q, K, scores, N, d_model, N, false, true, scale, 0.0f);
 	float* dY = inputs;
-	float* dV = new float[N * d_model];
-	for (int j = 0; j < N; ++j) {
-		for (int k = 0; k < d_model; ++k) {
-			float val = 0.0f;
-			for (int i = 0; i < N; ++i) val += scores[i * N + j] * dY[i * d_model + k];
-			dV[j * d_model + k] = val;
-		}
-	}
-	float* dScores = new float[N * N];
-	for (int i = 0; i < N; ++i) {
-		for (int j = 0; j < N; ++j) {
-			float val = 0.0f;
-			for (int k = 0; k < d_model; ++k) val += dY[i * d_model + k] * V[j * d_model + k];
-			dScores[i * N + j] = val;
-		}
-	}
-	float* dZ = new float[N * N];
+	matmult(dY, V_reuse, dScores_dZ, N, d_model, N, false, true, 1.0f, 0.0f);
 	for (int i = 0; i < N; ++i) {
 		float sum_ds_s = 0.0f;
-		for (int j = 0; j < N; ++j) sum_ds_s += dScores[i * N + j] * scores[i * N + j];
-		for (int j = 0; j < N; ++j) dZ[i * N + j] = scores[i * N + j] * (dScores[i * N + j] - sum_ds_s);
+		for (int j = 0; j < N; ++j) sum_ds_s += dScores_dZ[i * N + j] * scores[i * N + j];
+		for (int j = 0; j < N; ++j) dScores_dZ[i * N + j] = scores[i * N + j] * (dScores_dZ[i * N + j] - sum_ds_s);
 	}
-	float* dQ = new float[N * d_model];
-	float* dK = new float[N * d_model];
-	for (int i = 0; i < N; ++i) {
-		for (int k = 0; k < d_model; ++k) {
-			float valQ = 0.0f;
-			float valK = 0.0f;
-			for (int j = 0; j < N; ++j) {
-				valQ += dZ[i * N + j] * K[j * d_model + k];
-				valK += dZ[j * N + i] * Q[j * d_model + k];
-			}
-			dQ[i * d_model + k] = valQ * scale;
-			dK[i * d_model + k] = valK * scale;
-		}
-	}
-	float* dWQ = new float[d_model * d_model];
-	float* dWK = new float[d_model * d_model];
-	float* dWV = new float[d_model * d_model];
-	for (int i = 0; i < d_model; ++i) {
-		for (int j = 0; j < d_model; ++j) {
-			float gQ = 0.0f, gK = 0.0f, gV = 0.0f;
-			for (int n = 0; n < N; ++n) {
-				gQ += X[n * d_model + i] * dQ[n * d_model + j];
-				gK += X[n * d_model + i] * dK[n * d_model + j];
-				gV += X[n * d_model + i] * dV[n * d_model + j];
-			}
-			dWQ[i * d_model + j] = gQ;
-			dWK[i * d_model + j] = gK;
-			dWV[i * d_model + j] = gV;
-		}
-	}
+	float* dV = V_reuse;
+	matmult(scores, dY, dV, N, N, d_model, true, false, 1.0f, 0.0f);
 	float* grads = l->gradients;
-	for (int i = 0; i < d_model * d_model; ++i) grads[i] += dWQ[i];
-	for (int i = 0; i < d_model * d_model; ++i) grads[d_model * d_model + i] += dWK[i];
-	for (int i = 0; i < d_model * d_model; ++i) grads[2 * d_model * d_model + i] += dWV[i];
-	float* dX = outputs;
-	for (int n = 0; n < N; ++n) {
-		for (int i = 0; i < d_model; ++i) {
-			float val = 0.0f;
-			for (int j = 0; j < d_model; ++j) {
-				val += dQ[n * d_model + j] * QW[i * d_model + j];
-				val += dK[n * d_model + j] * KW[i * d_model + j];
-				val += dV[n * d_model + j] * VW[i * d_model + j];
-			}
-			dX[n * d_model + i] = val;
-		}
-	}
-	delete[] Q; delete[] K; delete[] V;
-	delete[] dV; delete[] dScores; delete[] dZ;
-	delete[] dQ; delete[] dK;
-	delete[] dWQ; delete[] dWK; delete[] dWV;
+	matmult(X, dV, grads + 2 * d_model * d_model, d_model, N, d_model, true, false, 1.0f, 1.0f);
+	matmult(dV, VW, outputs, N, d_model, d_model, false, true, 1.0f, 0.0f);
+	float* dQ = V_reuse;
+	matmult(dScores_dZ, K, dQ, N, N, d_model, false, false, scale, 0.0f);
+	matmult(X, dQ, grads, d_model, N, d_model, true, false, 1.0f, 1.0f);
+	matmult(dQ, QW, outputs, N, d_model, d_model, false, true, 1.0f, 1.0f);
+	float* dK = V_reuse;
+	matmult(dScores_dZ, Q, dK, N, N, d_model, true, false, scale, 0.0f);
+	matmult(X, dK, grads + d_model * d_model, d_model, N, d_model, true, false, 1.0f, 1.0f);
+	matmult(dK, KW, outputs, N, d_model, d_model, false, true, 1.0f, 1.0f);
 };
 
 
