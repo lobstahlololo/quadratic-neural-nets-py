@@ -45,15 +45,18 @@ inline LayerArgs EmbeddingLayer(int vocab_size, int embedding_dim) {
 	args.scratchSize = 1;
 	return args;
 }
-inline LayerArgs AttentionLayer(int d_model, int batch_tokens) {
+inline LayerArgs AttentionLayer(int embedding_dim, int sequence_length) {
 	LayerArgs args;
-	args.layerSize = d_model;
+	args.layerSize = embedding_dim;
 	args.kind = Parametric;
 	args.outputsPerNeuron = 1;
-	args.weightsPerInput = 3 * d_model;
+	args.weightsPerInput = 3 * embedding_dim;
 	args.hooks = { AttentionForward };
 	args.hookGrads = { AttentionDerivative };
-	args.scratchSize = 2 * batch_tokens * batch_tokens + 3 * batch_tokens * d_model;
+	args.scratchSize = sequence_length * sequence_length + 3 * sequence_length * embedding_dim;
+	#ifdef TRAINING_ON
+	args.scratchSize += sequence_length * sequence_length;
+	#endif
 	return args;
 }
 inline LayerArgs FFNLayer(int d_model, int hidden_dim, HookFunc activation, HookDerivative activationDeriv) {

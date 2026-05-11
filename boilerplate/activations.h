@@ -275,71 +275,71 @@ HookDerivative EmbeddingDerivative = [](LayerRef layer, int batchSize, float* la
 };
 
 HookFunc AttentionForward = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count) {
-	ParametricLayer* l = std::get<ParametricLayer*>(layer);
-	int d_model = count;
-	int N = batchSize;
-	float* W = l->weightsBegin;
-	float* QW = W;
-	float* KW = W + d_model * d_model;
-	float* VW = W + 2 * d_model * d_model;
-	float* Q = l->scratchPad;
-	float* K = Q + N * d_model;
-	float* V = K + N * d_model;
-	float* scores = V + N * d_model;
-	matmult(inputs, QW, Q, N, d_model, d_model, false, false, 1.0f, 0.0f);
-	matmult(inputs, KW, K, N, d_model, d_model, false, false, 1.0f, 0.0f);
-	matmult(inputs, VW, V, N, d_model, d_model, false, false, 1.0f, 0.0f);
-	float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-	matmult(Q, K, scores, N, d_model, N, false, true, scale, 0.0f);
-	for (int i = 0; i < N; ++i) {
-		float maxVal = scores[i * N];
-		for (int j = 1; j < N; ++j) if (scores[i * N + j] > maxVal) maxVal = scores[i * N + j];
-		float sumExp = 0.0f;
-		for (int j = 0; j < N; ++j) sumExp += std::exp(scores[i * N + j] - maxVal);
-		for (int j = 0; j < N; ++j) scores[i * N + j] = std::exp(scores[i * N + j] - maxVal) / sumExp;
+	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
+	int embedding_dim = count;
+	int sequence_length = batchSize;
+	float* weight_matrix = parametric_layer->weightsBegin;
+	float* query_weights = weight_matrix;
+	float* key_weights = weight_matrix + embedding_dim * embedding_dim;
+	float* value_weights = weight_matrix + 2 * embedding_dim * embedding_dim;
+	float* query = parametric_layer->scratchPad;
+	float* key = query + sequence_length * embedding_dim;
+	float* value = key + sequence_length * embedding_dim;
+	float* attention_scores = value + sequence_length * embedding_dim;
+	matmult(inputs, query_weights, query, sequence_length, embedding_dim, embedding_dim, false, false, 1.0f, 0.0f);
+	matmult(inputs, key_weights, key, sequence_length, embedding_dim, embedding_dim, false, false, 1.0f, 0.0f);
+	matmult(inputs, value_weights, value, sequence_length, embedding_dim, embedding_dim, false, false, 1.0f, 0.0f);
+	float inv_sqrt_dim = 1.0f / std::sqrt(static_cast<float>(embedding_dim));
+	matmult(query, key, attention_scores, sequence_length, embedding_dim, sequence_length, false, true, inv_sqrt_dim, 0.0f);
+	for (int row = 0; row < sequence_length; ++row) {
+		float row_max = attention_scores[row * sequence_length];
+		for (int col = 1; col < sequence_length; ++col) if (attention_scores[row * sequence_length + col] > row_max) row_max = attention_scores[row * sequence_length + col];
+		float row_sum = 0.0f;
+		for (int col = 0; col < sequence_length; ++col) row_sum += std::exp(attention_scores[row * sequence_length + col] - row_max);
+		for (int col = 0; col < sequence_length; ++col) attention_scores[row * sequence_length + col] = std::exp(attention_scores[row * sequence_length + col] - row_max) / row_sum;
 	}
-	matmult(scores, V, outputs, N, N, d_model, false, false, 1.0f, 0.0f);
+	matmult(attention_scores, value, outputs, sequence_length, sequence_length, embedding_dim, false, false, 1.0f, 0.0f);
 };
 
 HookDerivative AttentionDerivative = [](LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices) {
-	ParametricLayer* l = std::get<ParametricLayer*>(layer);
-	int d_model = count;
-	int N = batchSize;
-	float* X = layerInputs;
-	float* W = l->weightsBegin;
-	float* QW = W;
-	float* KW = W + d_model * d_model;
-	float* VW = W + 2 * d_model * d_model;
-	float* Q = l->scratchPad;
-	float* K = Q + N * d_model;
-	float* V_reuse = K + N * d_model;
-	float* scores = V_reuse + N * d_model;
-	float* dScores_dZ = scores + N * N;
-	matmult(X, QW, Q, N, d_model, d_model, false, false, 1.0f, 0.0f);
-	matmult(X, KW, K, N, d_model, d_model, false, false, 1.0f, 0.0f);
-	matmult(X, VW, V_reuse, N, d_model, d_model, false, false, 1.0f, 0.0f);
-	float scale = 1.0f / std::sqrt(static_cast<float>(d_model));
-	matmult(Q, K, scores, N, d_model, N, false, true, scale, 0.0f);
-	float* dY = inputs;
-	matmult(dY, V_reuse, dScores_dZ, N, d_model, N, false, true, 1.0f, 0.0f);
-	for (int i = 0; i < N; ++i) {
-		float sum_ds_s = 0.0f;
-		for (int j = 0; j < N; ++j) sum_ds_s += dScores_dZ[i * N + j] * scores[i * N + j];
-		for (int j = 0; j < N; ++j) dScores_dZ[i * N + j] = scores[i * N + j] * (dScores_dZ[i * N + j] - sum_ds_s);
+	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
+	int embedding_dim = count;
+	int sequence_length = batchSize;
+	float* input_embeddings = layerInputs;
+	float* weight_matrix = parametric_layer->weightsBegin;
+	float* query_weights = weight_matrix;
+	float* key_weights = weight_matrix + embedding_dim * embedding_dim;
+	float* value_weights = weight_matrix + 2 * embedding_dim * embedding_dim;
+	float* query = parametric_layer->scratchPad;
+	float* key = query + sequence_length * embedding_dim;
+	float* reusable_buffer = key + sequence_length * embedding_dim;
+	float* attention_scores = reusable_buffer + sequence_length * embedding_dim;
+	float* score_gradients = attention_scores + sequence_length * sequence_length;
+	matmult(input_embeddings, query_weights, query, sequence_length, embedding_dim, embedding_dim, false, false, 1.0f, 0.0f);
+	matmult(input_embeddings, key_weights, key, sequence_length, embedding_dim, embedding_dim, false, false, 1.0f, 0.0f);
+	matmult(input_embeddings, value_weights, reusable_buffer, sequence_length, embedding_dim, embedding_dim, false, false, 1.0f, 0.0f);
+	float inv_sqrt_dim = 1.0f / std::sqrt(static_cast<float>(embedding_dim));
+	matmult(query, key, attention_scores, sequence_length, embedding_dim, sequence_length, false, true, inv_sqrt_dim, 0.0f);
+	float* upstream_gradient = inputs;
+	matmult(upstream_gradient, reusable_buffer, score_gradients, sequence_length, embedding_dim, sequence_length, false, true, 1.0f, 0.0f);
+	for (int row = 0; row < sequence_length; ++row) {
+		float weighted_sum = 0.0f;
+		for (int col = 0; col < sequence_length; ++col) weighted_sum += score_gradients[row * sequence_length + col] * attention_scores[row * sequence_length + col];
+		for (int col = 0; col < sequence_length; ++col) score_gradients[row * sequence_length + col] = attention_scores[row * sequence_length + col] * (score_gradients[row * sequence_length + col] - weighted_sum);
 	}
-	float* dV = V_reuse;
-	matmult(scores, dY, dV, N, N, d_model, true, false, 1.0f, 0.0f);
-	float* grads = l->gradients;
-	matmult(X, dV, grads + 2 * d_model * d_model, d_model, N, d_model, true, false, 1.0f, 1.0f);
-	matmult(dV, VW, outputs, N, d_model, d_model, false, true, 1.0f, 0.0f);
-	float* dQ = V_reuse;
-	matmult(dScores_dZ, K, dQ, N, N, d_model, false, false, scale, 0.0f);
-	matmult(X, dQ, grads, d_model, N, d_model, true, false, 1.0f, 1.0f);
-	matmult(dQ, QW, outputs, N, d_model, d_model, false, true, 1.0f, 1.0f);
-	float* dK = V_reuse;
-	matmult(dScores_dZ, Q, dK, N, N, d_model, true, false, scale, 0.0f);
-	matmult(X, dK, grads + d_model * d_model, d_model, N, d_model, true, false, 1.0f, 1.0f);
-	matmult(dK, KW, outputs, N, d_model, d_model, false, true, 1.0f, 1.0f);
+	float* value_gradient = reusable_buffer;
+	matmult(attention_scores, upstream_gradient, value_gradient, sequence_length, sequence_length, embedding_dim, true, false, 1.0f, 0.0f);
+	float* gradients = parametric_layer->gradients;
+	matmult(input_embeddings, value_gradient, gradients + 2 * embedding_dim * embedding_dim, embedding_dim, sequence_length, embedding_dim, true, false, 1.0f, 1.0f);
+	matmult(value_gradient, value_weights, outputs, sequence_length, embedding_dim, embedding_dim, false, true, 1.0f, 0.0f);
+	float* query_gradient = reusable_buffer;
+	matmult(score_gradients, key, query_gradient, sequence_length, sequence_length, embedding_dim, false, false, inv_sqrt_dim, 0.0f);
+	matmult(input_embeddings, query_gradient, gradients, embedding_dim, sequence_length, embedding_dim, true, false, 1.0f, 1.0f);
+	matmult(query_gradient, query_weights, outputs, sequence_length, embedding_dim, embedding_dim, false, true, 1.0f, 1.0f);
+	float* key_gradient = reusable_buffer;
+	matmult(score_gradients, query, key_gradient, sequence_length, sequence_length, embedding_dim, true, false, inv_sqrt_dim, 0.0f);
+	matmult(input_embeddings, key_gradient, gradients + embedding_dim * embedding_dim, embedding_dim, sequence_length, embedding_dim, true, false, 1.0f, 1.0f);
+	matmult(key_gradient, key_weights, outputs, sequence_length, embedding_dim, embedding_dim, false, true, 1.0f, 1.0f);
 };
 
 
