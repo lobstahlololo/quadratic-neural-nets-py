@@ -58,3 +58,4 @@ In the future I could add skipping of zeroes to not have to compute quadratics i
 
 My plan is to make this *exactly* the same as a transformer just with squarewise FFN. So still some Re/GeLu, attention, etc.
 
+My AI tool, RComp, was used for certain padts of the code (mainly catching errors and bugs, as it's quite hard to on a phone, and making the AttentionHoik)

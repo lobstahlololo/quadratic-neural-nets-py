@@ -76,8 +76,9 @@ void trainScheduler(std::vector<Layer>& layers, const std::vector<float>& traini
 			float currentLR = minLearnRate + (learningRate - minLearnRate) * (1 + cos(3.14159265f * j / stepsPerEpoch)) / 2;
 			std::vector<float> batchData(trainingData.begin() + j * batchSize * inputSize, trainingData.begin() + (j + 1) * batchSize * inputSize);
 			std::vector<float> batchRequired(requiredOutput.begin() + j * batchSize * outputSize, requiredOutput.begin() + (j + 1) * batchSize * outputSize);
+			std::vector<std::vector<int>> batchIndices(requiredIndices.begin() + j * batchSize, requiredIndices.begin() + (j + 1) * batchSize);
 			int step = i * stepsPerEpoch + j;
-			train(layers, batchData, requiredIndices, batchRequired, currentLR, lossFunction, lossDerivative, step);
+			train(layers, batchData, batchIndices, batchRequired, currentLR, lossFunction, lossDerivative, step);
 		}
 	}
 }

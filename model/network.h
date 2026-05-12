@@ -7,7 +7,7 @@
 #include <variant>
 typedef std::variant<struct Layer*, struct ParametricLayer*> LayerRef;
 typedef void (*HookFunc)(LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count);
-typedef void (*HookDerivative)(LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count, const std::vector<int>& correctIndices);
+typedef void (*HookDerivative)(LayerRef layer, int batchSize, float* layerInputs, float* preactivations, float* upstream_grad, float* outputs, int count, const std::vector<int>& correctIndices);
 extern bool setuped;
 extern int networkSize;
 extern int batchSize;
