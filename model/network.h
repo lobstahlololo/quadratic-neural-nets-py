@@ -6,68 +6,70 @@
 #define TRAINING_ON
 #include <variant>
 typedef std::variant<struct Layer*, struct ParametricLayer*> LayerRef;
-typedef void (*HookFunc)(LayerRef layer, int batchSize, float* layerInputs, float* inputs, float* outputs, int count);
-typedef void (*HookDerivative)(LayerRef layer, int batchSize, float* layerInputs, float* preactivations, float* upstream_grad, float* outputs, int count, const std::vector<int>& correctIndices);
-extern bool setuped;
-extern int networkSize;
-extern int batchSize;
-extern std::pair<std::vector<float>, std::vector<float>> allocatedOutputs;
-
+typedef void (*HookFunc)(LayerRef layer, int sample_count, float* original_inputs, float* preactivation_values, float* output_values, int feature_count);
+typedef void (*HookDerivative)(LayerRef layer, int sample_count, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices);
+typedef void (*WeightInitFunc)(float* weights, int total_size, const std::vector<LayerArgs>& layers);
+extern bool is_setup;
+extern int network_size;
+extern int batch_size;
+extern std::pair<std::vector<float>, std::vector<float>> output_buffers;
 struct Layer {
-	float* weightsBegin;
+	float* weights_begin;
 	size_t input;
 	size_t output;
 	size_t size;
 	size_t neurons;
-	int outputsPerNeuron;
+	int outputs_per_neuron;
 	int batch;
-	float* scratchPad;
-	int scratchSize;
-	std::vector<HookFunc> forwardHooks;
-	std::vector<HookDerivative> forwardHookDerivatives;
-	float* quadratic() { return weightsBegin; }
-	float* linear() { return weightsBegin + (size - neurons) / 2; }
-	float* biases() { return weightsBegin + (size - neurons); }
-	size_t weightCount() const { return input * output * 2; }
-	float* forward(float* inputs, int tempBatchSize = 1);
+	float* scratch_pointer;
+	int scratch_size;
+	std::vector<HookFunc> forward_hooks;
+	std::vector<HookDerivative> forward_hook_derivatives;
+	float* quadratic() { return weights_begin; }
+	float* linear() { return weights_begin + (size - neurons) / 2; }
+	float* biases() { return weights_begin + (size - neurons); }
+	size_t weight_count() const { return input * output * 2; }
+	float* forward(float* inputs, int temporary_batch_size = 1);
 	#ifdef TRAINING_ON
 	float* previous_inputs;
-	float* previous_preacts;
-	float* gradients;
-	float* output_ptr;
-	float* backward(float* upstream_grad, const std::vector<int>& correctIndices, int tempBatchSize = 1);
+	float* previous_preactivations;
+	float* weight_gradients;
+	float* output_pointer;
+	float* backward(float* upstream_gradient, const std::vector<int>& correct_indices, int temporary_batch_size = 1);
 	#endif
 };
-
 struct ParametricLayer {
-	float* weightsBegin;
+	float* weights_begin;
 	size_t input;
 	size_t output;
 	int batch;
-	int outputsPerNeuron;
-	int weightsPerInput;
-	float* scratchPad;
-	int scratchSize;
-	std::vector<HookFunc> forwardHooks;
-	std::vector<HookDerivative> forwardHookDerivatives;
-	float* forward(float* inputs, int tempBatchSize = 1);
+	int outputs_per_neuron;
+	int weights_per_input;
+	float* scratch_pointer;
+	int scratch_size;
+	std::vector<HookFunc> forward_hooks;
+	std::vector<HookDerivative> forward_hook_derivatives;
+	float* forward(float* inputs, int temporary_batch_size = 1);
 	#ifdef TRAINING_ON
 	float* previous_inputs;
-	float* gradients;
-	float* output_ptr;
-	float* backward(float* upstream_grad, const std::vector<int>& correctIndices, int tempBatchSize = 1);
+	float* weight_gradients;
+	float* output_pointer;
+	float* backward(float* upstream_gradient, const std::vector<int>& correct_indices, int temporary_batch_size = 1);
 	#endif
 };
 enum LayerKind { Quadratic, Parametric };
-
 struct LayerArgs {
-	int layerSize;
+	int layer_size;
 	std::vector<HookFunc> hooks;
-	std::vector<HookDerivative> hookGrads;
+	std::vector<HookDerivative> hook_gradients;
 	LayerKind kind;
-	int outputsPerNeuron;
-	int weightsPerInput = 1;
-	int scratchSize = 0;
+	int outputs_per_neuron;
+	int weights_per_input = 1;
+	int scratch_size = 0;
 };
-void setupNeuralNetwork(std::vector<LayerArgs> layers, std::string weightsPath);
+void xavier_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers);
+void he_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers);
+void uniform_random_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers);
+void zero_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers);
+void setupNeuralNetwork(std::vector<LayerArgs> layers, std::string weights_path = "", WeightInitFunc initialiser = xavier_initialisation);
 #endif

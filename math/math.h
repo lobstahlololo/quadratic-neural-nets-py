@@ -1,7 +1,7 @@
 #ifndef QQ_MATH_LOADED
 #define QQ_MATH_LOADED
-void matmult(const float* mat1, const float* mat2, float* output,
-             int mat1rows, int m1colsm2rows, int mat2cols,
-             bool transA = false, bool transB = false,
+void matmult(const float* matrix_a, const float* matrix_b, float* result,
+             int rows_a, int inner_dimension, int cols_b,
+             bool transpose_a = false, bool transpose_b = false,
              float alpha = 1.0f, float beta = 1.0f);
 #endif

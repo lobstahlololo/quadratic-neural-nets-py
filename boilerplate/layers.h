@@ -2,73 +2,75 @@
 #define BOILERPLATE_LAYERS_H
 #include "../model/network.h"
 #include "activations.h"
-inline LayerArgs SoftmaxLayer(int d_model) {
+inline LayerArgs SoftmaxLayer(int model_dimension) {
 	LayerArgs args;
-	args.layerSize = d_model;
+	args.layer_size = model_dimension;
 	args.kind = Quadratic;
-	args.outputsPerNeuron = 1;
+	args.outputs_per_neuron = 1;
 	args.hooks = { Softmax };
-	args.hookGrads = { SoftmaxDerivative };
-	args.scratchSize = 0;
+	args.hook_gradients = { SoftmaxDerivative };
+	args.scratch_size = 0;
 	return args;
 }
-inline LayerArgs LearnableLayerNormLayer(int d_model) {
+inline LayerArgs LearnableLayerNormLayer(int model_dimension) {
 	LayerArgs args;
-	args.layerSize = d_model;
+	args.layer_size = model_dimension;
 	args.kind = Parametric;
-	args.outputsPerNeuron = 1;
-	args.weightsPerInput = 2;
+	args.outputs_per_neuron = 1;
+	args.weights_per_input = 2;
 	args.hooks = { LearnableLayerNorm };
-	args.hookGrads = { LearnableLayerNormDerivative };
-	args.scratchSize = 0;
+	args.hook_gradients = { LearnableLayerNormDerivative };
+	args.scratch_size = 0;
 	return args;
 }
-inline LayerArgs RMSNormLayer(int d_model) {
+inline LayerArgs RMSNormLayer(int model_dimension) {
 	LayerArgs args;
-	args.layerSize = d_model;
+	args.layer_size = model_dimension;
 	args.kind = Parametric;
-	args.outputsPerNeuron = 1;
-	args.weightsPerInput = 1;
+	args.outputs_per_neuron = 1;
+	args.weights_per_input = 1;
 	args.hooks = { RMSNorm };
-	args.hookGrads = { RMSNormDerivative };
-	args.scratchSize = 0;
+	args.hook_gradients = { RMSNormDerivative };
+	args.scratch_size = 0;
 	return args;
 }
-inline LayerArgs EmbeddingLayer(int vocab_size, int embedding_dim) {
+inline LayerArgs EmbeddingLayer(int vocabulary_size, int embedding_dimension) {
 	LayerArgs args;
-	args.layerSize = embedding_dim;
+	args.layer_size = embedding_dimension;
 	args.kind = Parametric;
-	args.outputsPerNeuron = 1;
-	args.weightsPerInput = vocab_size * embedding_dim;
+	args.outputs_per_neuron = 1;
+	args.weights_per_input = vocabulary_size * embedding_dimension;
 	args.hooks = { EmbeddingForward };
-	args.hookGrads = { EmbeddingDerivative };
-	args.scratchSize = 1;
+	args.hook_gradients = { EmbeddingDerivative };
+	args.scratch_size = 1;
 	return args;
 }
-inline LayerArgs AttentionLayer(int embedding_dim, int sequence_length) {
+inline LayerArgs AttentionLayer(int embedding_dimension, int sequence_length) {
 	LayerArgs args;
-	args.layerSize = embedding_dim;
+	args.layer_size = embedding_dimension;
 	args.kind = Parametric;
-	args.outputsPerNeuron = 1;
-	args.weightsPerInput = 3 * embedding_dim;
+	args.outputs_per_neuron = 1;
+	args.weights_per_input = 3 * embedding_dimension;
 	args.hooks = { AttentionForward };
-	args.hookGrads = { AttentionDerivative };
-	args.scratchSize = sequence_length * sequence_length + 3 * sequence_length * embedding_dim;
+	args.hook_gradients = { AttentionDerivative };
+	args.scratch_size = sequence_length * sequence_length + 3 * sequence_length * embedding_dimension;
 	#ifdef TRAINING_ON
-	args.scratchSize += sequence_length * sequence_length;
+	args.scratch_size += sequence_length * sequence_length;
 	#endif
 	return args;
 }
-inline LayerArgs FFNLayer(int d_model, int hidden_dim, HookFunc activation, HookDerivative activationDeriv) {
+inline LayerArgs FeedForwardLayer(int input_dimension, int output_dimension, std::vector<HookFunc> activations, std::vector<HookDerivative> activation_derivatives, int weights_per_input_override = 0) {
 	LayerArgs args;
-	args.layerSize = hidden_dim;
+	args.layer_size = output_dimension;
 	args.kind = Parametric;
-	args.outputsPerNeuron = 1;
-	args.weightsPerInput = d_model;
-	args.hooks = { activation };
-	args.hookGrads = { activationDeriv };
-	args.scratchSize = 0;
+	args.outputs_per_neuron = 1;
+	args.weights_per_input = weights_per_input_override ? weights_per_input_override : input_dimension;
+	args.hooks = activations;
+	args.hook_gradients = activation_derivatives;
+	args.scratch_size = 0;
 	return args;
 }
+inline LayerArgs FeedForwardLayer(int input_dimension, int output_dimension, HookFunc activation, HookDerivative activation_derivative, int weights_per_input_override = 0) {
+	return FeedForwardLayer(input_dimension, output_dimension, std::vector<HookFunc>{activation}, std::vector<HookDerivative>{activation_derivative}, weights_per_input_override);
+}
 #endif
-END2763
