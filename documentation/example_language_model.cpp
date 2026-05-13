@@ -12,42 +12,25 @@
 #include "../boilerplate/losses.h"
 int main() {
     const std::string story =
-        "The hero leaves home. "
-        "The hero faces trials. "
-        "The hero meets a mentor. "
-        "The hero gains a sword. "
-        "The hero enters the dark cave. "
-        "The hero confronts the shadow. "
-        "The hero claims the treasure. "
-        "The hero returns home. "
-        "The hero shares the treasure. "
+        "The hero leaves home. The hero faces trials. The hero meets a mentor. "
+        "The hero gains a sword. The hero enters the dark cave. The hero confronts the shadow. "
+        "The hero claims the treasure. The hero returns home. The hero shares the treasure. "
         "The hero becomes a legend. ";
-    std::vector<std::string> paragraphs;
-    std::string current;
+    std::vector<std::string> words;
+    std::string current_word;
     for (char character : story) {
-        if (character == '.' || character == '?' || character == '!') {
-            if (!current.empty()) paragraphs.push_back(current);
-            current.clear();
-        } else {
-            current += character;
-        }
-    }
-    std::vector<std::string> all_words;
-    for (const auto& paragraph : paragraphs) {
-        std::string word;
-        for (char character : paragraph) {
-            if (character == ' ') {
-                if (!word.empty()) all_words.push_back(word);
-                word.clear();
-            } else {
-                word += character;
+        if (character == ' ' || character == '.' || character == '?' || character == '!') {
+            if (!current_word.empty()) {
+                words.push_back(current_word);
+                current_word.clear();
             }
+        } else {
+            current_word += character;
         }
-        if (!word.empty()) all_words.push_back(word);
     }
     std::unordered_map<std::string, int> word_to_index;
     std::vector<int> token_ids;
-    for (const auto& word : all_words) {
+    for (const auto& word : words) {
         if (word_to_index.find(word) == word_to_index.end()) {
             int new_index = word_to_index.size();
             word_to_index[word] = new_index;
@@ -55,10 +38,10 @@ int main() {
         token_ids.push_back(word_to_index[word]);
     }
     int vocabulary_size = word_to_index.size() + 2;
-    int embedding_dimension = 32;
-    int sequence_length = 10;
+    int embedding_dimension = 64;
+    int sequence_length = 8;
     std::vector<float> training_data;
-    std::vector<float> target_output;
+    std::vector<float> targets;
     std::vector<std::vector<int>> correct_indices;
     for (size_t position = 0; position + sequence_length < token_ids.size(); ++position) {
         for (int step = 0; step < sequence_length; ++step) {
@@ -67,7 +50,7 @@ int main() {
         int next_word = token_ids[position + sequence_length];
         std::vector<float> one_hot(vocabulary_size, 0.0f);
         one_hot[next_word] = 1.0f;
-        target_output.insert(target_output.end(), one_hot.begin(), one_hot.end());
+        targets.insert(targets.end(), one_hot.begin(), one_hot.end());
         correct_indices.push_back({next_word});
     }
     batch_size = 1;
@@ -75,8 +58,8 @@ int main() {
     architecture.push_back(EmbeddingLayer(vocabulary_size, embedding_dimension));
     architecture.push_back(LearnableLayerNormLayer(embedding_dimension));
     architecture.push_back(AttentionLayer(embedding_dimension, sequence_length));
-    architecture.push_back(FeedForwardLayer(embedding_dimension, 64, ReLuHook, ReLuGradHook));
-    architecture.push_back(LearnableLayerNormLayer(64));
+    architecture.push_back(FeedForwardLayer(embedding_dimension, 128, ReLuHook, ReLuGradHook));
+    architecture.push_back(LearnableLayerNormLayer(128));
     LayerArgs output_layer;
     output_layer.layer_size = vocabulary_size;
     output_layer.kind = Quadratic;
@@ -85,14 +68,14 @@ int main() {
     output_layer.hook_gradients = { SoftmaxForCrossEntropyLossDerivative };
     architecture.push_back(output_layer);
     setupNeuralNetwork(architecture, "", he_initialisation);
-    int total_epochs = 30;
-    float initial_learning_rate = 0.01f;
-    float minimum_learning_rate = 0.0001f;
-    trainScheduler(layers, training_data, correct_indices, target_output,
-                   initial_learning_rate, minimum_learning_rate,
+    int total_epochs = 50;
+    float learning_rate = 0.01f;
+    float min_learning_rate = 0.0001f;
+    trainScheduler(layers, training_data, correct_indices, targets,
+                   learning_rate, min_learning_rate,
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
                    total_epochs, batch_size);
-    std::cout << "Language model trained on Hero's Journey.\n";
+    std::cout << "Language model training finished.\n";
     return 0;
 }

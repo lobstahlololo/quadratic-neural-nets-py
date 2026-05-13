@@ -18,6 +18,7 @@ If you only want inference (no training), leave out `train/train.cpp` and don't 
 This is the core of the library. Each `Layer` stores:
 - `quadratic()` — weights for the `x^2` term
 - `linear()` — weights for the `x` term
+END2763
 - `biases()` — bias values
 Forward pass computes:
 ```

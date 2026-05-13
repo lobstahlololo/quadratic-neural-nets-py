@@ -1,9 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <string>
 #include <cmath>
-#include <algorithm>
 #include "../model/network.h"
 #include "../train/train.h"
 #include "../math/math.h"
@@ -56,16 +54,18 @@ int main() {
             }
         }
     }
+    int input_size = rows * cols;
+    int hidden_size = 256;
+    int output_size = 10;
     std::vector<LayerArgs> architecture;
     LayerArgs input_layer;
-    input_layer.layer_size = rows * cols;
+    input_layer.layer_size = input_size;
     input_layer.kind = Quadratic;
     input_layer.outputs_per_neuron = 1;
     architecture.push_back(input_layer);
-    architecture.push_back(FeedForwardLayer(rows * cols, 256, ReLuHook, ReLuGradHook));
-    architecture.push_back(FeedForwardLayer(256, 128, ReLuHook, ReLuGradHook));
+    architecture.push_back(FeedForwardLayer(input_size, hidden_size, ReLuHook, ReLuGradHook));
     LayerArgs output_layer;
-    output_layer.layer_size = 10;
+    output_layer.layer_size = output_size;
     output_layer.kind = Quadratic;
     output_layer.outputs_per_neuron = 1;
     output_layer.hooks = { Softmax };
@@ -73,13 +73,13 @@ int main() {
     architecture.push_back(output_layer);
     setupNeuralNetwork(architecture, "", he_initialisation);
     int total_epochs = 20;
-    float initial_learning_rate = 0.01f;
-    float minimum_learning_rate = 0.0001f;
+    float learning_rate = 0.01f;
+    float min_learning_rate = 0.0001f;
     trainScheduler(layers, images, correct_indices, labels,
-                   initial_learning_rate, minimum_learning_rate,
+                   learning_rate, min_learning_rate,
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
                    total_epochs, batch_size);
-    std::cout << "Training finished.\n";
+    std::cout << "MNIST training finished.\n";
     return 0;
 }
