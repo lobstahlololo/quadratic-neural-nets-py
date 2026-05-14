@@ -95,15 +95,16 @@ float* Layer::backward(float* upstream_gradient, const std::vector<int>& correct
 			weight_gradients[bias_offset + n] += upstream_gradient[b * neurons + n];
 		}
 	}
+	float* post_activation_gradient = output_buffers.first.data();
 	float* scratch_data = output_buffers.second.data();
-	matmult(upstream_gradient, previous_inputs, weight_gradients, output, effective_batch_size, input);
-	matmult(upstream_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, effective_batch_size, input);
-	matmult(upstream_gradient, linear(), scratch_data, effective_batch_size, output, input);
+	matmult(post_activation_gradient, previous_inputs, weight_gradients, output, effective_batch_size, input);
+	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, effective_batch_size, input);
+	matmult(post_activation_gradient, linear(), scratch_data, effective_batch_size, output, input);
 	for (size_t i = 0; i < input * effective_batch_size; ++i) {
 		output_buffers.first.data()[i] = scratch_data[i];
 		scratch_data[i] = 0.0f;
 	}
-	matmult(upstream_gradient, quadratic(), scratch_data, effective_batch_size, output, input);
+	matmult(post_activation_gradient, quadratic(), scratch_data, effective_batch_size, output, input);
 	for (size_t i = 0; i < input * effective_batch_size; ++i) {
 		output_buffers.first.data()[i] += 2.0f * previous_inputs[i] * scratch_data[i];
 	}
