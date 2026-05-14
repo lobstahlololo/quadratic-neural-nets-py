@@ -30,13 +30,7 @@ int main() {
     }
     std::unordered_map<std::string, int> word_to_index;
     std::vector<int> token_ids;
-    for (const auto& word : words) {
-        if (word_to_index.find(word) == word_to_index.end()) {
-            int new_index = word_to_index.size();
-            word_to_index[word] = new_index;
-        }
-        token_ids.push_back(word_to_index[word]);
-    }
+    tokenize_words(words, token_ids, word_to_index);
     int vocabulary_size = word_to_index.size() + 2;
     int embedding_dimension = 64;
     int sequence_length = 8;

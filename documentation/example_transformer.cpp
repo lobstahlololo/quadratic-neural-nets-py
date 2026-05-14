@@ -10,6 +10,7 @@
 #include "../math/math.h"
 #include "../boilerplate/activations.h"
 #include "../boilerplate/layers.h"
+#include "../boilerplate/tokenizers.h"
 #include "../boilerplate/losses.h"
 std::string read_text_file(const std::string& filepath) {
     std::ifstream file(filepath);
@@ -42,25 +43,20 @@ int main() {
         full_text += read_text_file(filepath);
     }
     if (full_text.empty()) {
-        full_text = "The hero leaves home. The hero faces trials. The hero meets a mentor. "
-                    "The hero gains a sword. The hero enters the dark cave. The hero confronts the shadow. "
-                    "The hero claims the treasure. The hero returns home. The hero becomes a legend. ";
+        std::string base_text = "The hero leaves home. The hero faces trials. The hero meets a mentor. "
+                                "The hero gains a sword. The hero enters the dark cave. The hero confronts the shadow. "
+                                "The hero claims the treasure. The hero returns home. The hero becomes a legend. ";
+        for (int i = 0; i < 10; ++i) full_text += base_text;
         std::cout << "No dataset found. Using built-in Hero's Journey text.\n";
     }
-    std::unordered_map<char, int> character_to_index;
-    std::vector<char> unique_characters;
-    for (char character : full_text) {
-        if (character_to_index.find(character) == character_to_index.end()) {
-            int new_index = character_to_index.size();
-            character_to_index[character] = new_index;
-            unique_characters.push_back(character);
-        }
-    }
-    int vocabulary_size = character_to_index.size();
+    std::vector<char> text_chars(full_text.begin(), full_text.end());
     std::vector<int> token_ids;
-    for (char character : full_text) {
-        token_ids.push_back(character_to_index[character]);
-    }
+    std::unordered_map<std::string, int> vocabulary;
+    int target_vocab_size = 128; 
+    
+    std::cout << "Training BPE tokenizer...\n";
+    tokenize_bpe(text_chars, token_ids, vocabulary, target_vocab_size);
+    int vocabulary_size = vocabulary.size();
     int stride = maximum_sequence_length / 2;
     std::vector<float> training_data;
     std::vector<float> targets;

@@ -3,6 +3,9 @@
 #define ACTIVATIONS_IMPORTED
 #include "../model/network.h"
 #include <cmath>
+#include <algorithm>
+#include <variant>
+#include <vector>
 // utilities 
 
 HookFunc Residual = [](LayerRef layer, int sample_count, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {

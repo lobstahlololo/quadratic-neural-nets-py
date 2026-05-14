@@ -56,18 +56,35 @@ for (char character : text) {
 }
 if (!current_word.empty()) {
     words.push_back(current_word);
-}
-```
-## BPE Tokenizer (Skeleton)
-Byte-Pair Encoding merges frequently co-occurring character pairs into new tokens. The implementation in `tokenizers.h` is a skeleton and may need completion for production use.
+## BPE Tokenizer
+Byte-Pair Encoding merges frequently co-occurring character pairs into new tokens. The implementation in `tokenizers.h` is a fully functional BPE trainer and tokenizer.
 ```
 void tokenize_bpe(
     const vector<char>& input,
-    vector<pair<string, int>> output,
+    vector<int>& output,
+    unordered_map<string, int>& vocabulary,
     int vocabSize
 );
 ```
-For serious projects, consider using a pre-built tokenizer library (like HuggingFace tokenizers or SentencePiece) and importing the vocabulary.
+- `input` — the raw text as a vector of characters
+- `output` — filled with BPE token IDs
+- `vocabulary` — filled with the learned BPE vocabulary mapping string -> ID
+- `vocabSize` — the maximum number of tokens to learn
+
+Example:
+```
+std::vector<char> text = {'t', 'h', 'e', ' ', 't', 'h', 'e', 'y'};
+std::vector<int> token_ids;
+std::unordered_map<std::string, int> vocab;
+tokenize_bpe(text, token_ids, vocab, 100);
+```
+This will progressively merge pairs (e.g., 't'+'h' -> 'th', 'th'+'e' -> 'the') until the vocabulary reaches the target size.
+
+## Choosing a Tokenizer
+- **Character-Level (`tokenize_letter`)**: Easiest to set up, tiny vocabulary (256). Network needs a much larger sequence length to understand full sentences. Good for absolute basics.
+- **Word-Level (`tokenize_words`)**: Fast training since sequence length is small (1 word = 1 token). However, vocabulary grows uncontrollably on large datasets, and unseen words crash the system or get mapped to UNK.
+- **Byte-Pair Encoding (`tokenize_bpe`)**: The industry standard. Combines the best of both: small vocabulary size (defined by you), handles unseen words (splits them into known sub-words or characters), and compresses text efficiently.
+
 ## Using Token IDs as Network Input
 The network expects float inputs. Convert token IDs:
 ```

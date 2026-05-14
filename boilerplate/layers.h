@@ -2,6 +2,7 @@
 #define BOILERPLATE_LAYERS_H
 #include "../model/network.h"
 #include "activations.h"
+#include <vector>
 inline LayerArgs SoftmaxLayer(int model_dimension) {
 	LayerArgs args;
 	args.layer_size = model_dimension;
