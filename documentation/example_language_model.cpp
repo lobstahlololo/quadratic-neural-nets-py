@@ -11,15 +11,18 @@
 #include "../boilerplate/tokenizers.h"
 #include "../boilerplate/losses.h"
 int main() {
-    const std::string story =
-        "The hero leaves home. The hero faces trials. The hero meets a mentor. "
-        "The hero gains a sword. The hero enters the dark cave. The hero confronts the shadow. "
-        "The hero claims the treasure. The hero returns home. The hero shares the treasure. "
-        "The hero becomes a legend. ";
+    std::ifstream file("heroes_journey.txt");
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open heroes_journey.txt. Please ensure the file exists.\n";
+        return 1;
+    }
+    std::string story((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    file.close();
+
     std::vector<std::string> words;
     std::string current_word;
     for (char character : story) {
-        if (character == ' ' || character == '.' || character == '?' || character == '!') {
+        if (std::isspace(character) || std::ispunct(character)) {
             if (!current_word.empty()) {
                 words.push_back(current_word);
                 current_word.clear();
@@ -32,8 +35,8 @@ int main() {
     std::vector<int> token_ids;
     tokenize_words(words, token_ids, word_to_index);
     int vocabulary_size = word_to_index.size() + 2;
-    int embedding_dimension = 64;
-    int sequence_length = 8;
+    int embedding_dimension = 128;
+    int sequence_length = 12;
     std::vector<float> training_data;
     std::vector<float> targets;
     std::vector<std::vector<int>> correct_indices;
@@ -47,7 +50,7 @@ int main() {
         targets.insert(targets.end(), one_hot.begin(), one_hot.end());
         correct_indices.push_back({next_word});
     }
-    batch_size = 1;
+    batch_size = 16;
     std::vector<LayerArgs> architecture;
     architecture.push_back(EmbeddingLayer(vocabulary_size, embedding_dimension));
     architecture.push_back(LearnableLayerNormLayer(embedding_dimension));
@@ -62,7 +65,7 @@ int main() {
     output_layer.hook_gradients = { SoftmaxForCrossEntropyLossDerivative };
     architecture.push_back(output_layer);
     setupNeuralNetwork(architecture, "", he_initialisation);
-    int total_epochs = 50;
+    int total_epochs = 150;
     float learning_rate = 0.01f;
     float min_learning_rate = 0.0001f;
     trainScheduler(layers, training_data, correct_indices, targets,
