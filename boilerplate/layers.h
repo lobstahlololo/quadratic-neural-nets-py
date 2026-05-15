@@ -46,7 +46,7 @@ inline LayerArgs EmbeddingLayer(int vocabulary_size, int embedding_dimension) {
 	args.scratch_size = 1;
 	return args;
 }
-inline LayerArgs AttentionLayer(int embedding_dimension, int sequence_length) {
+inline LayerArgs AttentionLayer(int embedding_dimension, int sequence_length, int batchSize) {
 	LayerArgs args;
 	args.layer_size = embedding_dimension;
 	args.kind = Parametric;
@@ -54,10 +54,7 @@ inline LayerArgs AttentionLayer(int embedding_dimension, int sequence_length) {
 	args.weights_per_input = 3 * embedding_dimension;
 	args.hooks = { AttentionForward };
 	args.hook_gradients = { AttentionDerivative };
-	args.scratch_size = sequence_length * sequence_length + 3 * sequence_length * embedding_dimension;
-	#ifdef TRAINING_ON
-	args.scratch_size += sequence_length * sequence_length;
-	#endif
+	args.scratch_size = 2 * sequence_length * sequence_length + 3 * sequence_length * embedding_dimension;
 	return args;
 }
 inline LayerArgs FeedForwardLayer(int input_dimension, int output_dimension, std::vector<HookFunc> activations, std::vector<HookDerivative> activation_derivatives, int weights_per_input_override = 0) {
