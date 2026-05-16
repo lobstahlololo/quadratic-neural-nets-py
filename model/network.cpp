@@ -18,8 +18,9 @@ std::vector<float> global_inputs;
 std::vector<float> global_preactivations;
 std::vector<float> global_grads;
 #endif
-float* Layer::forward(float* inputs, int temporary_batch_size) {
-	int effective_batch_size = batch * temporary_batch_size;
+float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_sizes) {
+	int total_rows = 0;
+	for (int s : batch_sizes) total_rows += s;
 	if (size == 0) {
 		#ifdef TRAINING_ON
 		previous_inputs = inputs;
@@ -29,95 +30,98 @@ float* Layer::forward(float* inputs, int temporary_batch_size) {
 			return inputs;
 		}
 		LayerRef self(this);
-		std::copy(inputs, inputs + output * effective_batch_size, output_buffers.second.data());
+		std::copy(inputs, inputs + output * total_rows, output_buffers.second.data());
 		for (auto& hook : forward_hooks) {
-			hook(self, effective_batch_size, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
+			hook(self, batch_count, batch_sizes, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
 		}
-		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, output_buffers.first.data());
+		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_buffers.first.data());
 		if (output_pointer) {
-			std::copy(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, output_pointer);
+			std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_pointer);
 		}
-		std::fill(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, 0.0f);
+		std::fill(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, 0.0f);
 		return output_buffers.first.data();
 	}
 	float* in_ptr = inputs;
-	for (std::size_t i = 0; i < input * effective_batch_size; ++i) {
+	for (std::size_t i = 0; i < input * total_rows; ++i) {
 		squared_inputs_buffer[i] = in_ptr[i] * in_ptr[i];
 	}
-	matmult(linear(), inputs, output_buffers.second.data(), output, input, effective_batch_size);
-	matmult(quadratic(), squared_inputs_buffer.data(), output_buffers.second.data(), output, input, effective_batch_size);
-	for (std::size_t i = 0; i < output * effective_batch_size; ++i) {
+	matmult(linear(), inputs, output_buffers.second.data(), output, input, total_rows);
+	matmult(quadratic(), squared_inputs_buffer.data(), output_buffers.second.data(), output, input, total_rows);
+	for (std::size_t i = 0; i < output * total_rows; ++i) {
 		output_buffers.second[i] += biases()[i % output];
 	}
 	if (!forward_hooks.empty()) {
 		LayerRef self(this);
-		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, previous_preactivations);
+		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, previous_preactivations);
 		for (auto& hook : forward_hooks) {
-			hook(self, effective_batch_size, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
+			hook(self, batch_count, batch_sizes, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
 		}
 	}
 	#ifdef TRAINING_ON
-	std::copy(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, output_pointer);
+	std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_pointer);
 	#endif
-	std::copy(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, output_buffers.first.data());
-	std::fill(output_buffers.second.data(), output_buffers.second.data() + output * effective_batch_size, 0.0f);
+	std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_buffers.first.data());
+	std::fill(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, 0.0f);
 	return output_buffers.first.data();
 }
-float* ParametricLayer::forward(float* inputs, int temporary_batch_size) {
-	int effective_batch_size = batch * temporary_batch_size;
+float* ParametricLayer::forward(float* inputs, int batch_count, std::vector<int>& batch_sizes) {
+	int total_rows = 0;
+	for (int s : batch_sizes) total_rows += s;
 	if (forward_hooks.empty()) {
 		return inputs;
 	}
 	LayerRef self(this);
-		std::copy(inputs, inputs + input * effective_batch_size, output_buffers.first.data());
-		for (auto& hook : forward_hooks) {
-			hook(self, effective_batch_size, inputs, output_buffers.first.data(), output_buffers.first.data(), input);
-		}
-		if (output_pointer) {
-			std::copy(output_buffers.first.data(), output_buffers.first.data() + input * effective_batch_size, output_pointer);
-		}
-		return output_buffers.first.data();
+	std::copy(inputs, inputs + input * total_rows, output_buffers.first.data());
+	for (auto& hook : forward_hooks) {
+		hook(self, batch_count, batch_sizes, inputs, output_buffers.first.data(), output_buffers.first.data(), input);
+	}
+	if (output_pointer) {
+		std::copy(output_buffers.first.data(), output_buffers.first.data() + input * total_rows, output_pointer);
+	}
+	return output_buffers.first.data();
 }
 #ifdef TRAINING_ON
-float* Layer::backward(float* upstream_gradient, const std::vector<int>& correct_indices, int temporary_batch_size) {
-	int effective_batch_size = temporary_batch_size;
+float* Layer::backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices) {
+	int total_rows = 0;
+	for (int s : batch_sizes) total_rows += s;
 	if (!forward_hook_derivatives.empty()) {
 		LayerRef self(this);
 		for (auto& derivHook : forward_hook_derivatives) {
-			derivHook(self, effective_batch_size, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), output, correct_indices);
+			derivHook(self, batch_count, batch_sizes, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), output, correct_indices);
 		}
 	}
 	size_t total_weights = weight_count();
 	size_t bias_offset = total_weights;
 	std::fill(weight_gradients + bias_offset, weight_gradients + size, 0.0f);
-	for (size_t b = 0; b < effective_batch_size; ++b) {
+	for (size_t b = 0; b < total_rows; ++b) {
 		for (size_t n = 0; n < neurons; ++n) {
 			weight_gradients[bias_offset + n] += upstream_gradient[b * neurons + n];
 		}
 	}
 	float* post_activation_gradient = output_buffers.first.data();
 	float* scratch_data = output_buffers.second.data();
-	matmult(post_activation_gradient, previous_inputs, weight_gradients, output, effective_batch_size, input);
-	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, effective_batch_size, input);
-	matmult(post_activation_gradient, linear(), scratch_data, effective_batch_size, output, input);
-	for (size_t i = 0; i < input * effective_batch_size; ++i) {
+	matmult(post_activation_gradient, previous_inputs, weight_gradients, output, total_rows, input);
+	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, total_rows, input);
+	matmult(post_activation_gradient, linear(), scratch_data, total_rows, output, input);
+	for (size_t i = 0; i < input * total_rows; ++i) {
 		output_buffers.first.data()[i] = scratch_data[i];
 		scratch_data[i] = 0.0f;
 	}
-	matmult(post_activation_gradient, quadratic(), scratch_data, effective_batch_size, output, input);
-	for (size_t i = 0; i < input * effective_batch_size; ++i) {
+	matmult(post_activation_gradient, quadratic(), scratch_data, total_rows, output, input);
+	for (size_t i = 0; i < input * total_rows; ++i) {
 		output_buffers.first.data()[i] += 2.0f * previous_inputs[i] * scratch_data[i];
 	}
 	return output_buffers.first.data();
 }
-float* ParametricLayer::backward(float* upstream_gradient, const std::vector<int>& correct_indices, int temporary_batch_size) {
-	int effective_batch_size = temporary_batch_size;
+float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices) {
+	int total_rows = 0;
+	for (int s : batch_sizes) total_rows += s;
 	size_t weight_count = input * weights_per_input;
 	std::fill(weight_gradients, weight_gradients + weight_count, 0.0f);
 	if (!forward_hook_derivatives.empty()) {
 		LayerRef self(this);
 		for (auto& derivHook : forward_hook_derivatives) {
-			derivHook(self, effective_batch_size, previous_inputs, upstream_gradient, output_buffers.first.data(), input, correct_indices);
+			derivHook(self, batch_count, batch_sizes, previous_inputs, upstream_gradient, output_buffers.first.data(), input, correct_indices);
 		}
 	}
 	return output_buffers.first.data();
@@ -177,33 +181,28 @@ void zero_initialisation(float* weights, int total_size, const std::vector<Layer
 	std::fill(weights, weights + total_size, 0.0f);
 }
 
-void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser) {
+void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int max_sequence_length) {
 	layers.clear();
 	weights.clear();
 	layer_sizes.clear();
 	int maximum_neurons = 0;
 	network_size = 0;
-	int accumulated_batch_size = batch_size;
-	int maximum_accumulated_batch = batch_size;
+	int max_token_count = batch_size * max_sequence_length;
 	int maximum_buffer_size = 0;
 	LayerArgs* prev = nullptr;
 	for (auto& args : layersAdd) {
 		maximum_neurons = std::max(maximum_neurons, args.layer_size);
-		int layer_batch = accumulated_batch_size;
-		maximum_buffer_size = std::max(maximum_buffer_size, args.layer_size * layer_batch);
+		int token_capacity = args.layer_size * max_token_count;
+		if (token_capacity > maximum_buffer_size) maximum_buffer_size = token_capacity;
 		if (prev == nullptr) {
 			layer_sizes.push_back(args.layer_size);
 			prev = &args;
-			accumulated_batch_size *= args.outputs_per_neuron;
-			maximum_accumulated_batch = std::max(maximum_accumulated_batch, accumulated_batch_size);
 			continue;
 		}
-		accumulated_batch_size *= args.outputs_per_neuron;
-		maximum_accumulated_batch = std::max(maximum_accumulated_batch, accumulated_batch_size);
 		if (args.kind == Parametric) {
 			network_size += prev->layer_size * args.weights_per_input;
 		} else {
-			network_size += args.layer_size + args.layer_size * prev->layer_size * 2 * args.outputs_per_neuron;
+			network_size += args.layer_size + args.layer_size * prev->layer_size * 2;
 		}
 		layer_sizes.push_back(args.layer_size);
 		prev = &args;
@@ -214,22 +213,20 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 	};
 	resizeBuffers(maximum_buffer_size);
 	size_t maximum_squared_input_size = 0;
-	accumulated_batch_size = batch_size;
 	for (size_t i = 0; i < layersAdd.size(); ++i) {
 		if (i > 0 && layersAdd[i].kind != Parametric) {
 			size_t input_size = layersAdd[i-1].layer_size;
-			size_t needed = input_size * accumulated_batch_size;
+			size_t needed = input_size * max_token_count;
 			if (needed > maximum_squared_input_size) maximum_squared_input_size = needed;
 		}
-		accumulated_batch_size *= layersAdd[i].outputs_per_neuron;
 	}
 	squared_inputs_buffer.resize(maximum_squared_input_size);
 	size_t total_scratch = 0;
 	for (auto& args : layersAdd) total_scratch += args.scratch_size;
 	global_scratch_buffer.resize(total_scratch);
 	#ifdef TRAINING_ON
-	global_inputs.resize(maximum_neurons * maximum_neurons * maximum_accumulated_batch);
-	global_preactivations.resize(maximum_neurons * maximum_neurons * maximum_accumulated_batch);
+	global_inputs.resize(maximum_neurons * max_token_count);
+	global_preactivations.resize(maximum_neurons * max_token_count);
 	global_grads.resize(network_size);
 	#endif
 	weights.resize(network_size);
@@ -253,7 +250,6 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 	std::size_t accumulated_weights = 0;
 	std::size_t gradient_offset = 0;
 	std::size_t scratch_offset = 0;
-	int accumulated_batch = batch_size;
 	for (std::size_t i = 0; i < layersAdd.size(); ++i) {
 		Layer layer;
 		for (auto& h : layersAdd[i].hooks) {
@@ -275,13 +271,12 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 				layer.size = layer.input * layersAdd[i].weights_per_input;
 				layer.weights_begin = weight_start + accumulated_weights;
 			} else {
-				layer.size = layersAdd[i].layer_size + layersAdd[i].layer_size * layersAdd[i-1].layer_size * 2 * layersAdd[i].outputs_per_neuron;
+				layer.size = layersAdd[i].layer_size + layersAdd[i].layer_size * layersAdd[i-1].layer_size * 2;
 				layer.weights_begin = weight_start + accumulated_weights;
 			}
 		}
-		layer.batch = accumulated_batch;
-		accumulated_batch *= layersAdd[i].outputs_per_neuron;
-		size_t output_data_size = layer.output * layer.batch * layersAdd[i].outputs_per_neuron;
+		size_t output_data_size = layer.output * max_token_count;
+		layer.extra_args = layersAdd[i].extra_args;
 		layer.scratch_size = layersAdd[i].scratch_size;
 		layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
 		scratch_offset += layer.scratch_size;

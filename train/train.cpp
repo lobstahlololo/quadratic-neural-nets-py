@@ -4,30 +4,31 @@
 using std::vector;
 vector<float> first_moment_buffer;
 vector<float> second_moment_buffer;
-void train(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<std::vector<int>>& correct_indices, const std::vector<float>& required_output, float learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int step) {
+void train(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<std::vector<int>>& correct_indices, const std::vector<float>& required_output, float learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int step, int batch_count, std::vector<int>& batch_sizes) {
+	int total_rows = 0;
+	for (int s : batch_sizes) total_rows += s;
 	float* allocated_input_pointer = output_buffers.first.data(); 
 	for (int i = 0; i < layers.size(); ++i) {
-		allocated_input_pointer = layers[i].forward(allocated_input_pointer);
+		allocated_input_pointer = layers[i].forward(allocated_input_pointer, batch_count, batch_sizes);
 	}
-	vector<float> sample_losses(batch_size);
-	for (int i = 0; i < batch_size; ++i) {
+	vector<float> sample_losses(total_rows);
+	for (int i = 0; i < total_rows; ++i) {
 		sample_losses[i] = loss_function(output_buffers.first.data() + layers.back().output * i, required_output.data() + layers.back().output * i, correct_indices[i], layers.back().output);
 	}
-	vector<float> downstream_gradient(layers.back().output * batch_size);
-	for (int i = 0; i < batch_size; ++i) {
+	vector<float> downstream_gradient(layers.back().output * total_rows);
+	for (int i = 0; i < total_rows; ++i) {
 		loss_derivative(sample_losses[i], output_buffers.first.data() + layers.back().output * i, required_output.data() + layers.back().output * i, correct_indices[i], downstream_gradient.data() + layers.back().output * i, layers.back().output);
 	}
 	for (int i = 0; i < layers.size(); ++i) {
 		std::fill(layers[i].weight_gradients, layers[i].weight_gradients + layers[i].size, 0.0f);
 	}
 	float* downstream_pointer = downstream_gradient.data();
-	for (int b = 0; b < batch_size; ++b) {
-		int temporary_batch_size = correct_indices[b].size();
+	for (int b = 0; b < total_rows; ++b) {
 		float* downstream_sample_pointer = downstream_pointer + b * layers.back().output;
 		const std::vector<int>& sample_correct_indices = correct_indices[b];
 		float* sample_pointer = downstream_sample_pointer;
 		for (int i = layers.size() - 1; i >= 0; --i) {
-			sample_pointer = layers[i].backward(sample_pointer, sample_correct_indices, temporary_batch_size);
+			sample_pointer = layers[i].backward(sample_pointer, batch_count, batch_sizes, sample_correct_indices);
 		}
 	}
 	float scaled_learning_rate = learning_rate / batch_size;
@@ -47,21 +48,27 @@ void train(std::vector<Layer>& layers, const std::vector<float>& training_data, 
 		moment_offset += layer.size;
 	}
 }
-void trainScheduler(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<std::vector<int>>& correct_indices, std::vector<float> required_output, float learning_rate, float minimum_learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int total_epochs, int batch_size_arg) {
+void trainScheduler(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<std::vector<int>>& correct_indices, std::vector<float> required_output, float learning_rate, float minimum_learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int total_epochs, int batch_size_arg, std::vector<int> initial_batch_sizes) {
 	first_moment_buffer.resize(network_size);
 	second_moment_buffer.resize(network_size);
 	batch_size = batch_size_arg;
+	if (initial_batch_sizes.empty()) {
+		initial_batch_sizes.resize(batch_size, 1);
+	}
 	int input_size = layers[0].input;
 	int output_size = layers.back().output;
-	int steps_per_epoch = training_data.size() / (batch_size * input_size);
+	int total_input_rows = 0;
+	for (int s : initial_batch_sizes) total_input_rows += s;
+	int steps_per_epoch = training_data.size() / (total_input_rows * input_size);
 	for (int epoch = 0; epoch < total_epochs; ++epoch) {
 		for (int j = 0; j < steps_per_epoch; ++j) {
 			float current_learning_rate = minimum_learning_rate + (learning_rate - minimum_learning_rate) * (1 + cos(3.14159265f * j / steps_per_epoch)) / 2;
-			std::vector<float> batch_inputs(training_data.begin() + j * batch_size * input_size, training_data.begin() + (j + 1) * batch_size * input_size);
-			std::vector<float> batch_targets(required_output.begin() + j * batch_size * output_size, required_output.begin() + (j + 1) * batch_size * output_size);
-			std::vector<std::vector<int>> batch_correct_indices(correct_indices.begin() + j * batch_size, correct_indices.begin() + (j + 1) * batch_size);
+			std::vector<float> batch_inputs(training_data.begin() + j * total_input_rows * input_size, training_data.begin() + (j + 1) * total_input_rows * input_size);
+			std::vector<float> batch_targets(required_output.begin() + j * total_input_rows * output_size, required_output.begin() + (j + 1) * total_input_rows * output_size);
+			std::vector<std::vector<int>> batch_correct_indices(correct_indices.begin() + j * total_input_rows, correct_indices.begin() + (j + 1) * total_input_rows);
 			int step = epoch * steps_per_epoch + j;
-			train(layers, batch_inputs, batch_correct_indices, batch_targets, current_learning_rate, loss_function, loss_derivative, step);
+			std::vector<int> mutable_batch_sizes = initial_batch_sizes;
+			train(layers, batch_inputs, batch_correct_indices, batch_targets, current_learning_rate, loss_function, loss_derivative, step, batch_size, mutable_batch_sizes);
 		}
 	}
 }
