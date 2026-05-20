@@ -127,59 +127,6 @@ float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std:
 	return output_buffers.first.data();
 }
 #endif
-void xavier_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
-	int weight_index = 0;
-	for (size_t layer_idx = 1; layer_idx < layers.size(); ++layer_idx) {
-		const LayerArgs& current = layers[layer_idx];
-		const LayerArgs& previous = layers[layer_idx - 1];
-		int input_dimension = previous.layer_size;
-		int output_dimension = current.layer_size;
-		float scale = std::sqrt(6.0f / (input_dimension + output_dimension));
-		int layer_weights = 0;
-		if (current.kind == Parametric) {
-			layer_weights = input_dimension * current.weights_per_input;
-		} else {
-			layer_weights = current.layer_size + current.layer_size * input_dimension * 2 * current.outputs_per_neuron;
-		}
-		for (int i = 0; i < layer_weights; ++i) {
-			float random_value = static_cast<float>(rand()) / RAND_MAX;
-			weights[weight_index + i] = (random_value * 2.0f - 1.0f) * scale;
-		}
-		weight_index += layer_weights;
-	}
-}
-
-void he_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
-	int weight_index = 0;
-	for (size_t layer_idx = 1; layer_idx < layers.size(); ++layer_idx) {
-		const LayerArgs& current = layers[layer_idx];
-		const LayerArgs& previous = layers[layer_idx - 1];
-		int input_dimension = previous.layer_size;
-		float scale = std::sqrt(2.0f / input_dimension);
-		int layer_weights = 0;
-		if (current.kind == Parametric) {
-			layer_weights = input_dimension * current.weights_per_input;
-		} else {
-			layer_weights = current.layer_size + current.layer_size * input_dimension * 2 * current.outputs_per_neuron;
-		}
-		for (int i = 0; i < layer_weights; ++i) {
-			float random_value = static_cast<float>(rand()) / RAND_MAX;
-			weights[weight_index + i] = (random_value * 2.0f - 1.0f) * scale;
-		}
-		weight_index += layer_weights;
-	}
-}
-
-void uniform_random_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
-	for (int i = 0; i < total_size; ++i) {
-		float random_value = static_cast<float>(rand()) / RAND_MAX;
-		weights[i] = random_value - 0.5f;
-	}
-}
-
-void zero_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
-	std::fill(weights, weights + total_size, 0.0f);
-}
 
 void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int max_sequence_length) {
 	layers.clear();
