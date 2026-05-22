@@ -61,13 +61,11 @@ int main() {
     LayerArgs input_layer;
     input_layer.layer_size = input_size;
     input_layer.kind = Quadratic;
-    input_layer.outputs_per_neuron = 1;
     architecture.push_back(input_layer);
     architecture.push_back(FeedForwardLayer(input_size, hidden_size, ReLuHook, ReLuGradHook));
     LayerArgs output_layer;
     output_layer.layer_size = output_size;
     output_layer.kind = Quadratic;
-    output_layer.outputs_per_neuron = 1;
     output_layer.hooks = { Softmax };
     output_layer.hook_gradients = { SoftmaxForCrossEntropyLossDerivative };
     architecture.push_back(output_layer);
@@ -80,6 +78,7 @@ int main() {
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
                    total_epochs, batch_size);
-    std::cout << "MNIST training finished.\n";
+    save_weights("mnist_model.bin");
+    std::cout << "MNIST training finished. Weights saved to mnist_model.bin\n";
     return 0;
 }

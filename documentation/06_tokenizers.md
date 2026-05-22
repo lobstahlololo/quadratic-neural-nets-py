@@ -56,29 +56,31 @@ for (char character : text) {
 }
 if (!current_word.empty()) {
     words.push_back(current_word);
-## BPE Tokenizer
-Byte-Pair Encoding merges frequently co-occurring character pairs into new tokens. The implementation in `tokenizers.h` is a fully functional BPE trainer and tokenizer.
+## BPE Vocabulary Training
+`train_bpe_vocabulary` (in `tokenizers.h`) learns a vocabulary of subword tokens from text. It does not output token IDs; use `bpe_tokenize` from `boilerplate/inference.h` to convert new text into token IDs using this vocabulary.
 ```
-void tokenize_bpe(
-    const vector<char>& input,
-    vector<int>& output,
-    unordered_map<string, int>& vocabulary,
-    int vocabSize
-);
+void train_bpe_vocabulary(const vector<char>& input, unordered_map<string, int>& vocabulary, int vocabSize);
 ```
 - `input` — the raw text as a vector of characters
-- `output` — filled with BPE token IDs
 - `vocabulary` — filled with the learned BPE vocabulary mapping string -> ID
 - `vocabSize` — the maximum number of tokens to learn
 
 Example:
 ```
 std::vector<char> text = {'t', 'h', 'e', ' ', 't', 'h', 'e', 'y'};
-std::vector<int> token_ids;
 std::unordered_map<std::string, int> vocab;
-tokenize_bpe(text, token_ids, vocab, 100);
+train_bpe_vocabulary(text, vocab, 100);
 ```
-This will progressively merge pairs (e.g., 't'+'h' -> 'th', 'th'+'e' -> 'the') until the vocabulary reaches the target size.
+This will progressively merge pairs until the vocabulary reaches the target size.
+
+### Tokenizing with a pre-trained vocabulary
+Use `bpe_tokenize` from `boilerplate/inference.h`:
+```
+std::string new_text = "they the";
+std::vector<int> token_ids;
+bpe_tokenize(new_text, vocab, token_ids);
+```
+This does greedy longest-match tokenization using the vocabulary. Save/load the vocabulary with `save_vocabulary` / `load_vocabulary` from the same header.
 
 ## Choosing a Tokenizer
 - **Character-Level (`tokenize_letter`)**: Easiest to set up, tiny vocabulary (256). Network needs a much larger sequence length to understand full sentences. Good for absolute basics.

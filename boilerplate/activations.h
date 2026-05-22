@@ -177,6 +177,32 @@ HookDerivative RMSNormDerivative = [](LayerRef layer, int batch_count, std::vect
 		}
 	}
 };
+HookFunc TemperatureHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+	float temperature = layer.extra_args.size() > 0 ? static_cast<float>(layer.extra_args[0]) / 1000.0f : 0.0f;
+	if (temperature <= 0.0f) {
+		int total = 0;
+		for (int s : batch_sizes) total += s * feature_count;
+		for (int i = 0; i < total; ++i) output_values[i] = preactivation_values[i];
+		return;
+	}
+	int total = 0;
+	for (int s : batch_sizes) total += s * feature_count;
+	float inv_temp = 1.0f / temperature;
+	for (int i = 0; i < total; ++i) output_values[i] = preactivation_values[i] * inv_temp;
+};
+HookDerivative TemperatureGradHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+	float temperature = layer.extra_args.size() > 0 ? static_cast<float>(layer.extra_args[0]) / 1000.0f : 0.0f;
+	if (temperature <= 0.0f) {
+		int total = 0;
+		for (int s : batch_sizes) total += s * feature_count;
+		for (int i = 0; i < total; ++i) output_gradient[i] = upstream_gradient[i];
+		return;
+	}
+	int total = 0;
+	for (int s : batch_sizes) total += s * feature_count;
+	float inv_temp = 1.0f / temperature;
+	for (int i = 0; i < total; ++i) output_gradient[i] = upstream_gradient[i] * inv_temp;
+};
 HookFunc ReLuHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int total = 0;
 	for (int s : batch_sizes) total += s * feature_count;

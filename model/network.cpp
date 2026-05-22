@@ -177,6 +177,7 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 	global_grads.resize(network_size);
 	#endif
 	weights.resize(network_size);
+
 	if (weights_path.empty()) {
 		initialiser(weights.data(), network_size, layersAdd);
 	} else {
@@ -192,6 +193,7 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 		}
 		file.read(reinterpret_cast<char*>(weights.data()), network_size * sizeof(float));
 	}
+
 	float* weight_start = weights.data();
 	std::size_t previous_output_offset = 0;
 	std::size_t accumulated_weights = 0;
@@ -245,4 +247,15 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 		}
 	}
 	is_setup = true;
+}
+
+void save_weights(std::string path) {
+	
+	std::ofstream file(path, std::ios::binary);
+	if (!file) {
+		throw std::runtime_error("wrong filepath");
+	}
+	file.write(reinterpret_cast<const char*>(weights), network_size * sizeof(float));
+	
+
 }

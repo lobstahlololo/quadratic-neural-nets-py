@@ -70,4 +70,5 @@ void he_initialisation(float* weights, int total_size, const std::vector<LayerAr
 void uniform_random_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers);
 void zero_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers);
 void setupNeuralNetwork(std::vector<LayerArgs> layers, std::string weights_path = "", WeightInitFunc initialiser = xavier_initialisation, int max_sequence_length = 1);
+void save_weights(std::string path);
 #endif

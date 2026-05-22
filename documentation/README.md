@@ -86,7 +86,6 @@ std::vector<LayerArgs> architecture;
 LayerArgs input_layer;
 input_layer.layer_size = 784;
 input_layer.kind = Quadratic;
-input_layer.outputs_per_neuron = 1;
 architecture.push_back(input_layer);
 architecture.push_back(
     FeedForwardLayer(784, 128, ReLuHook, ReLuGradHook)
@@ -94,9 +93,8 @@ architecture.push_back(
 LayerArgs output_layer;
 output_layer.layer_size = 10;
 output_layer.kind = Quadratic;
-output_layer.outputs_per_neuron = 1;
 architecture.push_back(output_layer);
-setupNeuralNetwork(architecture, "UNDEFINED276lineosersyoujelly?");
+setupNeuralNetwork(architecture, "");
 ```
 The magic string `"UNDEFINED276lineosersyoujelly?"` initialises weights randomly. Pass a file path to load saved weights instead.
 ## Loss Functions — The Two Systems
@@ -141,7 +139,8 @@ trainScheduler(layers, training_data, correct_indices, required_output,
 `boilerplate/tokenizers.h` contains:
 - `tokenize_letter` — character-level tokenizer
 - `tokenize_words` — word-level tokenizer with dynamic vocabulary
-- `tokenize_bpe` — Byte-Pair Encoding (skeleton, may need completion)
+- `train_bpe_vocabulary` — learns a BPE vocabulary from text
+Use `bpe_tokenize` from `boilerplate/inference.h` to tokenize new text with that vocabulary.
 Example — word tokenization:
 ```
 std::vector<std::string> words = {"the", "hero", "leaves"};
@@ -149,6 +148,7 @@ std::vector<int> token_ids;
 std::unordered_map<std::string, int> word_to_index;
 tokenize_words(words, token_ids, word_to_index);
 ```
+After training, save your model weights with `save_weights("my_model.bin")`. For language models, also save the vocabulary via `save_vocabulary(vocab, "vocab.txt")` from `boilerplate/inference.h`. See `documentation/08_inference.md` for loading and generating text.
 ## Full Examples
 - `documentation/example_mnist.cpp` — digit classifier on MNIST
 - `documentation/example_language_model.cpp` — tiny transformer trained on Hero's Journey text

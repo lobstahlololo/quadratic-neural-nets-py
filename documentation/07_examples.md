@@ -77,6 +77,7 @@ g++ -std=c++17 -DTRAINING_ON -DQQ_BLAS_CUBLAS \
     -lcublas -lcudart -o your_program
 ```
 ---
+After training, the examples save the model weights and, for language models, the vocabulary. You can load them for inference using `setupNeuralNetwork` with the weight file path and `load_vocabulary`. See `documentation/08_inference.md` for a full guide on loading a model and generating text.
 ## Common Issues
 **"wrong filepath" error:** You tried to load weights from a file that doesn't exist. Use `""` (empty string) for random initialisation with the default Xavier method.
 **"wrong file size relation to weights" error:** The weight file size doesn't match the network size. Check that the file was saved from a network with the same architecture.

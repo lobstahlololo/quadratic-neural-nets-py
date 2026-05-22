@@ -3,12 +3,14 @@
 #include <string>
 #include <cmath>
 #include <unordered_map>
+#include <fstream>
 #include "../model/network.h"
 #include "../train/train.h"
 #include "../math/math.h"
 #include "../boilerplate/activations.h"
 #include "../boilerplate/layers.h"
 #include "../boilerplate/tokenizers.h"
+#include "../boilerplate/inference.h"
 #include "../boilerplate/losses.h"
 int main() {
     std::ifstream file("heroes_journey.txt");
@@ -18,29 +20,21 @@ int main() {
     }
     std::string story((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
     file.close();
-
-    std::vector<std::string> words;
-    std::string current_word;
-    for (char character : story) {
-        if (std::isspace(character) || std::ispunct(character)) {
-            if (!current_word.empty()) {
-                words.push_back(current_word);
-                current_word.clear();
-            }
-        } else {
-            current_word += character;
-        }
-    }
-    std::unordered_map<std::string, int> word_to_index;
+    std::vector<char> text_chars(story.begin(), story.end());
+    std::unordered_map<std::string, int> vocabulary;
+    int target_vocab_size = 128;
+    std::cout << "Training BPE vocabulary...\n";
+    train_bpe_vocabulary(text_chars, vocabulary, target_vocab_size);
+    int vocabulary_size = vocabulary.size();
     std::vector<int> token_ids;
-    tokenize_words(words, token_ids, word_to_index);
-    int vocabulary_size = word_to_index.size() + 2;
+    bpe_tokenize(story, vocabulary, token_ids);
     int embedding_dimension = 128;
     int sequence_length = 12;
+    int stride = sequence_length / 2;
     std::vector<float> training_data;
     std::vector<float> targets;
     std::vector<std::vector<int>> correct_indices;
-    for (size_t position = 0; position + sequence_length < token_ids.size(); ++position) {
+    for (size_t position = 0; position + sequence_length < token_ids.size(); position += stride) {
         for (int step = 0; step < sequence_length; ++step) {
             training_data.push_back(static_cast<float>(token_ids[position + step]));
         }
@@ -60,7 +54,6 @@ int main() {
     LayerArgs output_layer;
     output_layer.layer_size = vocabulary_size;
     output_layer.kind = Quadratic;
-    output_layer.outputs_per_neuron = 1;
     output_layer.hooks = { Softmax };
     output_layer.hook_gradients = { SoftmaxForCrossEntropyLossDerivative };
     architecture.push_back(output_layer);
@@ -73,6 +66,8 @@ int main() {
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
                    total_epochs, batch_size);
-    std::cout << "Language model training finished.\n";
+    save_weights("transformer_weights.bin");
+    save_vocabulary(vocabulary, "transformer_vocab.txt");
+    std::cout << "Language model training finished. Weights and vocabulary saved.\n";
     return 0;
 }

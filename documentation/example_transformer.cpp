@@ -50,13 +50,13 @@ int main() {
         std::cout << "No dataset found. Using built-in Hero's Journey text.\n";
     }
     std::vector<char> text_chars(full_text.begin(), full_text.end());
-    std::vector<int> token_ids;
     std::unordered_map<std::string, int> vocabulary;
-    int target_vocab_size = 128; 
-    
-    std::cout << "Training BPE tokenizer...\n";
-    tokenize_bpe(text_chars, token_ids, vocabulary, target_vocab_size);
+    int target_vocab_size = 128;
+    std::cout << "Training BPE vocabulary...\n";
+    train_bpe_vocabulary(text_chars, vocabulary, target_vocab_size);
     int vocabulary_size = vocabulary.size();
+    std::vector<int> token_ids;
+    bpe_tokenize(full_text, vocabulary, token_ids);
     int stride = maximum_sequence_length / 2;
     std::vector<float> training_data;
     std::vector<float> targets;
@@ -90,7 +90,6 @@ int main() {
     LayerArgs output_layer;
     output_layer.layer_size = vocabulary_size;
     output_layer.kind = Quadratic;
-    output_layer.outputs_per_neuron = 1;
     output_layer.hooks = { Softmax };
     output_layer.hook_gradients = { SoftmaxForCrossEntropyLossDerivative };
     architecture.push_back(output_layer);
@@ -105,6 +104,8 @@ int main() {
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
                    epochs, batch_size);
-    std::cout << "Transformer training finished.\n";
+    save_weights("transformer_weights.bin");
+    save_vocabulary(vocabulary, "transformer_vocab.txt");
+    std::cout << "Transformer training finished. Weights saved to transformer_weights.bin, vocabulary saved to transformer_vocab.txt\n";
     return 0;
 }

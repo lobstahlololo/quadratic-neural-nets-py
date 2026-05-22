@@ -88,5 +88,6 @@ inline void uniform_random_initialisation(float* weights, int total_size, const 
 }
 inline void zero_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
 	std::fill(weights, weights + total_size, 0.0f);
+	
 }
 #endif

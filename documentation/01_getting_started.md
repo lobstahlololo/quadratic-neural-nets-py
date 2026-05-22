@@ -54,9 +54,9 @@ struct LayerArgs {
     std::vector<HookFunc> hooks;       // forward activation hooks
     std::vector<HookDerivative> hook_gradients; // backward hooks
     LayerKind kind;                    // Quadratic or Parametric
-    int outputs_per_neuron;            // usually 1
-    int weights_per_input;             // for Parametric layers
-    int scratch_size;                  // temporary buffer size
+    int weights_per_input;             // for Parametric layers (default 1)
+    int scratch_size;                  // temporary buffer size (default 0)
+    std::vector<int> extra_args;       // optional extra arguments
 };
 ```
 Example — a simple two-layer network:
@@ -65,19 +65,16 @@ std::vector<LayerArgs> architecture;
 LayerArgs input_layer;
 input_layer.layer_size = 784;
 input_layer.kind = Quadratic;
-input_layer.outputs_per_neuron = 1;
 architecture.push_back(input_layer);
 LayerArgs hidden_layer;
 hidden_layer.layer_size = 256;
 hidden_layer.kind = Quadratic;
-hidden_layer.outputs_per_neuron = 1;
 hidden_layer.hooks = { ReLuHook };
 hidden_layer.hook_gradients = { ReLuGradHook };
 architecture.push_back(hidden_layer);
 LayerArgs output_layer;
 output_layer.layer_size = 10;
 output_layer.kind = Quadratic;
-output_layer.outputs_per_neuron = 1;
 output_layer.hooks = { Softmax };
 output_layer.hook_gradients = { SoftmaxDerivative };
 architecture.push_back(output_layer);

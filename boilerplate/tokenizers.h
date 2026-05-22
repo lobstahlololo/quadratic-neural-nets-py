@@ -26,7 +26,7 @@ struct Token {
 	int right;
 	bool duplicate;
 };
-void tokenize_bpe(const std::vector<char>& input, std::vector<int>& output, std::unordered_map<std::string, int>& vocabulary, int vocabSize) {
+void train_bpe_vocabulary(const std::vector<char>& input, std::unordered_map<std::string, int>& vocabulary, int vocabSize) {
 	std::vector<Token> tokens;
 	tokens.reserve(input.size());
 	std::map<std::pair<std::string, std::string>, std::vector<int>> pairPositions;
@@ -116,10 +116,6 @@ void tokenize_bpe(const std::vector<char>& input, std::vector<int>& output, std:
 	int idx = 0;
 	for (auto& kv : vocabulary) {
 		kv.second = idx++;
-	}
-	for (int i = 0; i < tokens.size(); ++i) {
-		if (tokens[i].duplicate) continue;
-		output.push_back(vocabulary[tokens[i].representation]);
 	}
 }
 #endif
