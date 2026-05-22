@@ -128,13 +128,13 @@ float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std:
 }
 #endif
 
-void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int max_sequence_length) {
+void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int buffer_multiplier) {
 	layers.clear();
 	weights.clear();
 	layer_sizes.clear();
 	int maximum_neurons = 0;
 	network_size = 0;
-	int max_token_count = batch_size * max_sequence_length;
+	int max_token_count = batch_size * buffer_multiplier;
 	int maximum_buffer_size = 0;
 	LayerArgs* prev = nullptr;
 	for (auto& args : layersAdd) {

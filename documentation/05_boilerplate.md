@@ -60,10 +60,10 @@ architecture.push_back(EmbeddingLayer(32000, 512)); // 32k vocab, 512-dim embedd
 ## AttentionLayer
 Creates a single-head self-attention layer.
 ```
-LayerArgs AttentionLayer(int embedding_dimension, int sequence_length);
+LayerArgs AttentionLayer(int embedding_dimension, int max_sequence_length);
 ```
 - `embedding_dimension` — size of each token's embedding
-- `sequence_length` — number of tokens in the sequence
+- `max_sequence_length` — maximum number of tokens in a sequence (buffer multiplier)
 - Creates a `Parametric` layer with `3 * embedding_dimension * embedding_dimension` weights (Q, K, V matrices)
 - Forward: projects input into Q, K, V; computes attention scores; applies softmax; multiplies by V
 - Backward: computes gradients for Q, K, V weights and input

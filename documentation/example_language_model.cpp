@@ -42,7 +42,7 @@ int main() {
         std::vector<float> one_hot(vocabulary_size, 0.0f);
         one_hot[next_word] = 1.0f;
         targets.insert(targets.end(), one_hot.begin(), one_hot.end());
-        correct_indices.push_back({next_word});
+        correct_indices.push_back(next_word);
     }
     batch_size = 16;
     std::vector<LayerArgs> architecture;

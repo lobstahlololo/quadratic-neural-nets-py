@@ -42,12 +42,12 @@ inline LayerArgs EmbeddingLayer(int vocabulary_size, int embedding_dimension) {
 	args.scratch_size = 1;
 	return args;
 }
-inline LayerArgs AttentionLayer(int embedding_dimension, int max_sequence_length, int batchSize, bool use_kv_cache = false) {
+inline LayerArgs AttentionLayer(int embedding_dimension, int max_sequence_length, bool use_kv_cache = false) {
 	LayerArgs args;
 	args.layer_size = embedding_dimension;
 	args.kind = Parametric;
 	args.weights_per_input = 3 * embedding_dimension;
-	args.scratch_size = 2 * max_sequence_length * max_sequence_length + 3 * max_sequence_length * embedding_dimension;
+	args.scratch_size = 2 * max_sequence_length * max_sequence_length + 4 * max_sequence_length * embedding_dimension + batch_size;
 	args.extra_args = { max_sequence_length };
 #ifndef TRAINING_ON
 	if (use_kv_cache) {

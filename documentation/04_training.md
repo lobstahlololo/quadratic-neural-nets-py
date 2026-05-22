@@ -52,8 +52,7 @@ targets = [0, 0, 1, 0, 0, 0, 0, 0, 0, 0,   // sample 0 (class 2)
 ### Correct indices
 `correct_indices` stores the correct class index for each sample:
 ```
-correct_indices = [{2}, {0}, {5}, ...]
-correct_indices = [{2}, {0}, {5}, ...]
+correct_indices = {2, 0, 5, ...}
 ```
 ## Setting Batch Size
 Set the global `batch_size` before calling `setupNeuralNetwork()`:

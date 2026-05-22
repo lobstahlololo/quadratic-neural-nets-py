@@ -69,7 +69,7 @@ int main() {
         std::vector<float> one_hot(vocabulary_size, 0.0f);
         one_hot[next_token] = 1.0f;
         targets.insert(targets.end(), one_hot.begin(), one_hot.end());
-        correct_indices.push_back({next_token});
+        correct_indices.push_back(next_token);
     }
     std::cout << "Vocabulary size: " << vocabulary_size << "\n";
     std::cout << "Training sequences: " << correct_indices.size() << "\n";

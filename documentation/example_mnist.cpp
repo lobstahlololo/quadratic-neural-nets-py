@@ -45,11 +45,11 @@ int main() {
     int image_count, rows, cols, label_count;
     auto images = read_mnist_images("train-images-idx3-ubyte", image_count, rows, cols);
     auto labels = read_mnist_labels("train-labels-idx1-ubyte", label_count);
-    std::vector<std::vector<int>> correct_indices(label_count);
+    std::vector<int> correct_indices(label_count);
     for (int i = 0; i < label_count; ++i) {
         for (int j = 0; j < 10; ++j) {
             if (labels[i * 10 + j] == 1.0f) {
-                correct_indices[i].push_back(j);
+                correct_indices[i] = j;
                 break;
             }
         }

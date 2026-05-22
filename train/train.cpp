@@ -4,7 +4,7 @@
 using std::vector;
 vector<float> first_moment_buffer;
 vector<float> second_moment_buffer;
-void train(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<std::vector<int>>& correct_indices, const std::vector<float>& required_output, float learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int step, int batch_count, std::vector<int>& batch_sizes) {
+void train(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<int>& correct_indices, const std::vector<float>& required_output, float learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int step, int batch_count, std::vector<int>& batch_sizes) {
 	int total_rows = 0;
 	for (int s : batch_sizes) total_rows += s;
 	float* allocated_input_pointer = output_buffers.first.data(); 
@@ -13,23 +13,18 @@ void train(std::vector<Layer>& layers, const std::vector<float>& training_data, 
 	}
 	vector<float> sample_losses(total_rows);
 	for (int i = 0; i < total_rows; ++i) {
-		sample_losses[i] = loss_function(output_buffers.first.data() + layers.back().output * i, required_output.data() + layers.back().output * i, correct_indices[i], layers.back().output);
+		std::vector<int> single_target = { correct_indices[i] };
+		sample_losses[i] = loss_function(output_buffers.first.data() + layers.back().output * i, required_output.data() + layers.back().output * i, single_target, layers.back().output);
 	}
 	vector<float> downstream_gradient(layers.back().output * total_rows);
 	for (int i = 0; i < total_rows; ++i) {
-		loss_derivative(sample_losses[i], output_buffers.first.data() + layers.back().output * i, required_output.data() + layers.back().output * i, correct_indices[i], downstream_gradient.data() + layers.back().output * i, layers.back().output);
+		std::vector<int> single_target = { correct_indices[i] };
+		loss_derivative(sample_losses[i], output_buffers.first.data() + layers.back().output * i, required_output.data() + layers.back().output * i, single_target, downstream_gradient.data() + layers.back().output * i, layers.back().output);
 	}
-	for (int i = 0; i < layers.size(); ++i) {
-		std::fill(layers[i].weight_gradients, layers[i].weight_gradients + layers[i].size, 0.0f);
-	}
-	float* downstream_pointer = downstream_gradient.data();
-	for (int b = 0; b < total_rows; ++b) {
-		float* downstream_sample_pointer = downstream_pointer + b * layers.back().output;
-		const std::vector<int>& sample_correct_indices = correct_indices[b];
-		float* sample_pointer = downstream_sample_pointer;
-		for (int i = layers.size() - 1; i >= 0; --i) {
-			sample_pointer = layers[i].backward(sample_pointer, batch_count, batch_sizes, sample_correct_indices);
-		}
+	std::vector<int> mutable_batch_sizes = batch_sizes;
+	float* grad_ptr = downstream_gradient.data();
+	for (int i = layers.size() - 1; i >= 0; --i) {
+		grad_ptr = layers[i].backward(grad_ptr, batch_count, mutable_batch_sizes, correct_indices);
 	}
 	float scaled_learning_rate = learning_rate / batch_size;
 	float first_moment_decay_power = pow(0.9f, step + 1);
@@ -48,7 +43,7 @@ void train(std::vector<Layer>& layers, const std::vector<float>& training_data, 
 		moment_offset += layer.size;
 	}
 }
-void trainScheduler(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<std::vector<int>>& correct_indices, std::vector<float> required_output, float learning_rate, float minimum_learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int total_epochs, int batch_size_arg, std::vector<int> initial_batch_sizes) {
+void trainScheduler(std::vector<Layer>& layers, const std::vector<float>& training_data, const std::vector<int>& correct_indices, std::vector<float> required_output, float learning_rate, float minimum_learning_rate, const LossFunc& loss_function, const LossDerivative& loss_derivative, int total_epochs, int batch_size_arg, std::vector<int> initial_batch_sizes) {
 	first_moment_buffer.resize(network_size);
 	second_moment_buffer.resize(network_size);
 	batch_size = batch_size_arg;
@@ -65,7 +60,7 @@ void trainScheduler(std::vector<Layer>& layers, const std::vector<float>& traini
 			float current_learning_rate = minimum_learning_rate + (learning_rate - minimum_learning_rate) * (1 + cos(3.14159265f * j / steps_per_epoch)) / 2;
 			std::vector<float> batch_inputs(training_data.begin() + j * total_input_rows * input_size, training_data.begin() + (j + 1) * total_input_rows * input_size);
 			std::vector<float> batch_targets(required_output.begin() + j * total_input_rows * output_size, required_output.begin() + (j + 1) * total_input_rows * output_size);
-			std::vector<std::vector<int>> batch_correct_indices(correct_indices.begin() + j * total_input_rows, correct_indices.begin() + (j + 1) * total_input_rows);
+			std::vector<int> batch_correct_indices(correct_indices.begin() + j * total_input_rows, correct_indices.begin() + (j + 1) * total_input_rows);
 			int step = epoch * steps_per_epoch + j;
 			std::vector<int> mutable_batch_sizes = initial_batch_sizes;
 			train(layers, batch_inputs, batch_correct_indices, batch_targets, current_learning_rate, loss_function, loss_derivative, step, batch_size, mutable_batch_sizes);

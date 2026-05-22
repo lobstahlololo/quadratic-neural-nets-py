@@ -266,9 +266,7 @@ HookFunc Softmax = [](LayerRef layer, int batch_count, std::vector<int>& batch_s
 HookDerivative SoftmaxDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total_rows = 0;
 	for (int s : batch_sizes) total_rows += s;
-	int sample_count_per_target = total_rows / correct_indices.size();
 	std::vector<float> softmax_values(total_rows * feature_count);
-	int offset = 0;
 	for (int i = 0; i < total_rows; ++i) {
 		float* inp = preactivation_values + i * feature_count;
 		float* out = softmax_values.data() + i * feature_count;
@@ -278,33 +276,28 @@ HookDerivative SoftmaxDerivative = [](LayerRef layer, int batch_count, std::vect
 		for (int j = 0; j < feature_count; ++j) sum += std::exp(inp[j] - maximum);
 		for (int j = 0; j < feature_count; ++j) out[j] = std::exp(inp[j] - maximum) / sum;
 	}
-	for (int target_idx = 0; target_idx < correct_indices.size(); ++target_idx) {
-		int correct_token = correct_indices[target_idx];
-		for (int b = 0; b < sample_count_per_target; ++b) {
-			float* soft = softmax_values.data() + (target_idx * sample_count_per_target + b) * feature_count;
-			float* out = output_gradient + (target_idx * sample_count_per_target + b) * feature_count;
-			float* up = upstream_gradient + (target_idx * sample_count_per_target + b) * feature_count;
-			float grad_at_correct = up[correct_token];
-			for (int j = 0; j < feature_count; ++j) out[j] = up[j] * soft[j] - soft[j] * soft[correct_token] * grad_at_correct;
-		}
+	for (int i = 0; i < total_rows; ++i) {
+		int correct_token = correct_indices[i];
+		float* soft = softmax_values.data() + i * feature_count;
+		float* out = output_gradient + i * feature_count;
+		float* up = upstream_gradient + i * feature_count;
+		float grad_at_correct = up[correct_token];
+		for (int j = 0; j < feature_count; ++j) out[j] = up[j] * soft[j] - soft[j] * soft[correct_token] * grad_at_correct;
 	}
 };
 HookDerivative SoftmaxForCrossEntropyLossDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total_rows = 0;
 	for (int s : batch_sizes) total_rows += s;
-	int sample_count_per_target = total_rows / correct_indices.size();
-	for (int target_idx = 0; target_idx < correct_indices.size(); ++target_idx) {
-		int correct_token = correct_indices[target_idx];
-		for (int b = 0; b < sample_count_per_target; ++b) {
-			float* logit_sample = preactivation_values + (target_idx * sample_count_per_target + b) * feature_count;
-			float* out_sample = output_gradient + (target_idx * sample_count_per_target + b) * feature_count;
-			float maximum = logit_sample[0];
-			for (int j = 1; j < feature_count; ++j) if (logit_sample[j] > maximum) maximum = logit_sample[j];
-			float sum_exp = 0.0f;
-			for (int j = 0; j < feature_count; ++j) sum_exp += std::exp(logit_sample[j] - maximum);
-			for (int j = 0; j < feature_count; ++j) out_sample[j] = std::exp(logit_sample[j] - maximum) / sum_exp;
-			out_sample[correct_token] -= 1.0f;
-		}
+	for (int i = 0; i < total_rows; ++i) {
+		int correct_token = correct_indices[i];
+		float* logit_sample = preactivation_values + i * feature_count;
+		float* out_sample = output_gradient + i * feature_count;
+		float maximum = logit_sample[0];
+		for (int j = 1; j < feature_count; ++j) if (logit_sample[j] > maximum) maximum = logit_sample[j];
+		float sum_exp = 0.0f;
+		for (int j = 0; j < feature_count; ++j) sum_exp += std::exp(logit_sample[j] - maximum);
+		for (int j = 0; j < feature_count; ++j) out_sample[j] = std::exp(logit_sample[j] - maximum) / sum_exp;
+		out_sample[correct_token] -= 1.0f;
 	}
 };
 HookFunc EmbeddingForward = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
@@ -345,10 +338,12 @@ HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>
 	float* key = query + max_seq_len * embedding_dimension;
 	float* value = key + max_seq_len * embedding_dimension;
 	float* attention_scores = value + max_seq_len * embedding_dimension;
+	float* stored_lengths = attention_scores + max_seq_len * max_seq_len;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
 	int offset = 0;
 	for (int seq = 0; seq < batch_count; ++seq) {
 		int actual_len = batch_sizes[seq];
+		stored_lengths[seq] = static_cast<float>(actual_len);
 		float* seq_input = preactivation_values + offset;
 		float* seq_output = output_values + offset;
 		matmult(seq_input, query_weights, query, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
@@ -387,6 +382,7 @@ HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>
 		}
 		matmult(attention_scores, value, seq_output, max_seq_len, max_seq_len, embedding_dimension, false, false, 1.0f, 0.0f);
 		offset += max_seq_len * embedding_dimension;
+		batch_sizes[seq] = actual_len;
 	}
 };
 HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
@@ -398,18 +394,29 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::ve
 	float* query_weights = weight_matrix;
 	float* key_weights = weight_matrix + embedding_dimension * embedding_dimension;
 	float* value_weights = weight_matrix + 2 * embedding_dimension * embedding_dimension;
-	float* query = parametric_layer->scratch_pointer;
+	float* scratch = parametric_layer->scratch_pointer;
+	float* query = scratch;
 	float* key = query + max_seq_len * embedding_dimension;
 	float* temporary_buffer = key + max_seq_len * embedding_dimension;
 	float* attention_scores = temporary_buffer + max_seq_len * embedding_dimension;
 	float* score_gradients = attention_scores + max_seq_len * max_seq_len;
+	float* stored_lengths = score_gradients + max_seq_len * max_seq_len;
+	float* full_upstream = stored_lengths + batch_count;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
 	int offset = 0;
+	int upstream_offset = 0;
 	for (int seq = 0; seq < batch_count; ++seq) {
+		int original_len = static_cast<int>(stored_lengths[seq]);
 		int actual_len = batch_sizes[seq];
 		float* seq_input = input_embeddings + offset;
-		float* seq_upstream = upstream_gradient + offset;
+		float* seq_upstream_reduced = upstream_gradient + upstream_offset;
 		float* seq_output_grad = output_gradient + offset;
+		std::fill(full_upstream, full_upstream + max_seq_len * embedding_dimension, 0.0f);
+		for (int row = 0; row < actual_len; ++row) {
+			for (int col = 0; col < embedding_dimension; ++col) {
+				full_upstream[row * embedding_dimension + col] = seq_upstream_reduced[row * embedding_dimension + col];
+			}
+		}
 		matmult(seq_input, query_weights, query, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
 		matmult(seq_input, key_weights, key, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
 		matmult(seq_input, value_weights, temporary_buffer, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
@@ -444,26 +451,28 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::ve
 				attention_scores[row * max_seq_len + col] = std::exp(attention_scores[row * max_seq_len + col] - row_max) / row_sum;
 			}
 		}
-		matmult(seq_upstream, temporary_buffer, score_gradients, max_seq_len, embedding_dimension, max_seq_len, false, true, 1.0f, 0.0f);
+		matmult(full_upstream, temporary_buffer, score_gradients, max_seq_len, embedding_dimension, max_seq_len, false, true, 1.0f, 0.0f);
 		for (int row = 0; row < max_seq_len; ++row) {
 			float weighted_sum = 0.0f;
 			for (int col = 0; col < max_seq_len; ++col) weighted_sum += score_gradients[row * max_seq_len + col] * attention_scores[row * max_seq_len + col];
 			for (int col = 0; col < max_seq_len; ++col) score_gradients[row * max_seq_len + col] = attention_scores[row * max_seq_len + col] * (score_gradients[row * max_seq_len + col] - weighted_sum);
 		}
 		float* value_gradient = temporary_buffer;
-		matmult(attention_scores, seq_upstream, value_gradient, max_seq_len, max_seq_len, embedding_dimension, true, false, 1.0f, 0.0f);
+		matmult(attention_scores, full_upstream, value_gradient, max_seq_len, max_seq_len, embedding_dimension, true, false, 1.0f, 0.0f);
 		float* gradients = parametric_layer->weight_gradients;
 		matmult(seq_input, value_gradient, gradients + 2 * embedding_dimension * embedding_dimension, embedding_dimension, max_seq_len, embedding_dimension, true, false, 1.0f, 1.0f);
-		matmult(value_gradient, value_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
 		float* query_gradient = temporary_buffer;
 		matmult(score_gradients, key, query_gradient, max_seq_len, max_seq_len, embedding_dimension, false, false, inverse_sqrt_dimension, 0.0f);
 		matmult(seq_input, query_gradient, gradients, embedding_dimension, max_seq_len, embedding_dimension, true, false, 1.0f, 1.0f);
-		matmult(query_gradient, query_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
 		float* key_gradient = temporary_buffer;
 		matmult(score_gradients, query, key_gradient, max_seq_len, max_seq_len, embedding_dimension, true, false, inverse_sqrt_dimension, 0.0f);
 		matmult(seq_input, key_gradient, gradients + embedding_dimension * embedding_dimension, embedding_dimension, max_seq_len, embedding_dimension, true, false, 1.0f, 1.0f);
+		matmult(query_gradient, query_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
 		matmult(key_gradient, key_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		matmult(value_gradient, value_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		batch_sizes[seq] = original_len;
 		offset += max_seq_len * embedding_dimension;
+		upstream_offset += actual_len * embedding_dimension;
 	}
 };
 #ifndef TRAINING_ON
