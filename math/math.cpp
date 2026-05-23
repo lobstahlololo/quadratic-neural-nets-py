@@ -1,6 +1,9 @@
 #ifndef QQ_MATH_CPP
 #define QQ_MATH_CPP
 #include "math.h"
+#ifdef QQ_BLAS_NPU
+#include "npublas.h"
+#endif
 #ifdef QQ_BLAS_CUBLAS
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -16,6 +19,14 @@ void matmult(const float* matrix_a, const float* matrix_b, float* result,
              int rows_a, int inner_dimension, int cols_b,
              bool transpose_a, bool transpose_b,
              float alpha, float beta) {
+#ifdef QQ_BLAS_NPU
+    if (!transpose_a && !transpose_b && alpha == 1.0f && beta == 0.0f) {
+        if (npublas::npu_available()) {
+            int err = npublas::matmul_8bit(matrix_a, matrix_b, result, rows_a, inner_dimension, cols_b);
+            if (err == 0) return;
+        }
+    }
+#endif
 #ifdef QQ_BLAS_CUBLAS
     static cublasHandle_t cublas_handle = nullptr;
     if (!cublas_handle) {
