@@ -65,7 +65,7 @@ int main() {
     int sequences_per_batch = 8;
     batch_size = sequences_per_batch;
     setupNeuralNetwork(architecture, "", he_initialisation, sequence_length);
-    int batch_rows = sequences_per_batch * sequence_length;
+
     std::vector<int> batch_sizes(sequences_per_batch, sequence_length);
     int total_epochs = 30;
     float learning_rate = 0.001f;
@@ -75,7 +75,7 @@ int main() {
                    learning_rate, min_learning_rate,
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
-                   total_epochs, batch_rows, batch_sizes);
+                   total_epochs, batch_size, batch_sizes);
     save_weights("transformer_weights.bin");
     save_vocabulary(vocabulary, "transformer_vocab.txt");
     std::cout << "Training finished. Weights and vocabulary saved.\n";

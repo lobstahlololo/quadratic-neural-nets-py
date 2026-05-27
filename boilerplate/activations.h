@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <variant>
 #include <vector>
+
+#include <iostream>
 #ifndef TRAINING_ON
 std::vector<std::vector<float>> kv_cache_pool;
 #endif
@@ -75,6 +77,8 @@ HookFunc LearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<in
 	float* gamma = parametric_layer->weights_begin;
 	float* beta = gamma + parametric_layer->input;
 	int offset = 0;
+	std::cout << "layernorm learn" << "\n";
+	std::cout << batch_count << " batches, feature count: " << feature_count << "actual batch sizes: " << batch_sizes.size();
 	for (int b = 0; b < batch_count; ++b) {
 		int rows = batch_sizes[b];
 		for (int r = 0; r < rows; ++r) {

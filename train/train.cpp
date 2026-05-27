@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cmath>
 #include <variant>
+#include <iostream>
 using std::vector;
 vector<float> first_moment_buffer;
 vector<float> second_moment_buffer;
@@ -78,12 +79,19 @@ void trainScheduler(std::vector<std::variant<Layer, ParametricLayer>>& layers, c
 	if (initial_batch_sizes.empty()) {
 		initial_batch_sizes.resize(batch_size, 1);
 	}
+	std::cout << "batch size: " << batch_size << "\n";
+	std::cout << "initial batch size size:" << initial_batch_sizes.size() << "\n";
+	
         int input_size = 0;
         std::visit([&](auto& l) { input_size = l.input; }, layers[0]);
         int output_size = 0;
         std::visit([&](auto& l) { output_size = l.output; }, layers.back());
 	int total_input_rows = 0;
-	for (int s : initial_batch_sizes) total_input_rows += s;
+	for (int s : initial_batch_sizes) {
+		total_input_rows += s;
+		std::cout << "Batch size: " << s << "\n";
+	}
+	
 	int steps_per_epoch = training_data.size() / (total_input_rows * input_size);
 	for (int epoch = 0; epoch < total_epochs; ++epoch) {
 		float epoch_loss = 0.0f;

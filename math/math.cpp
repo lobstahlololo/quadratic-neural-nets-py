@@ -128,22 +128,15 @@ naive_fallback:
     return;
 naive_fallback:
 #endif
-    int opA_rows = transpose_a ? inner_dimension : rows_a;
-    int opA_cols = transpose_a ? rows_a : inner_dimension;
-    int opB_rows = transpose_b ? cols_b : inner_dimension;
-    int opB_cols = transpose_b ? inner_dimension : cols_b;
-    int output_rows = opA_rows;
-    int output_cols = opB_cols;
-    for (int row = 0; row < output_rows; ++row) {
-        for (int col = 0; col < output_cols; ++col) {
+for (int row = 0; row < rows_a; ++row) {
+        for (int col = 0; col < cols_b; ++col) {
             float sum = 0.0f;
-            for (int inner = 0; inner < opA_cols; ++inner) {
-                float a_val = transpose_a ? matrix_a[inner * inner_dimension + row] : matrix_a[row * inner_dimension + inner];
+            for (int inner = 0; inner < inner_dimension; ++inner) {
+                float a_val = transpose_a ? matrix_a[inner * rows_a + row] : matrix_a[row * inner_dimension + inner];
                 float b_val = transpose_b ? matrix_b[col * inner_dimension + inner] : matrix_b[inner * cols_b + col];
                 sum += a_val * b_val;
             }
-            result[row * output_cols + col] = beta * result[row * output_cols + col] + alpha * sum;
+            result[row * cols_b + col] = beta * result[row * cols_b + col] + alpha * sum;
         }
-    }
 }
 #endif
