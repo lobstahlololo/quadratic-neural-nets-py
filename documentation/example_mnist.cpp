@@ -8,6 +8,7 @@
 #include "../boilerplate/activations.h"
 #include "../boilerplate/layers.h"
 #include "../boilerplate/losses.h"
+#include "../boilerplate/weight_inits.h"
 std::vector<float> read_mnist_images(const std::string& filepath, int& image_count, int& rows, int& cols) {
     std::ifstream file(filepath, std::ios::binary);
     int magic, count, r, c;

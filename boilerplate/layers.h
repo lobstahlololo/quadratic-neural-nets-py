@@ -68,8 +68,7 @@ inline LayerArgs AttentionLayer(int embedding_dimension, int max_sequence_length
 inline LayerArgs FeedForwardLayer(int input_dimension, int output_dimension, std::vector<HookFunc> activations, std::vector<HookDerivative> activation_derivatives, int weights_per_input_override = 0) {
 	LayerArgs args;
 	args.layer_size = output_dimension;
-	args.kind = Parametric;
-	args.weights_per_input = weights_per_input_override ? weights_per_input_override : input_dimension;
+	args.kind = Quadratic;
 	args.hooks = activations;
 	args.hook_gradients = activation_derivatives;
 	args.scratch_size = 0;

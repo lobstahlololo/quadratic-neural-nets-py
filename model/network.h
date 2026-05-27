@@ -3,8 +3,8 @@
 #include <vector>
 #include <functional>
 #include <string>
-#define TRAINING_ON
 #include <variant>
+struct LayerArgs;
 typedef std::variant<struct Layer*, struct ParametricLayer*> LayerRef;
 typedef void (*HookFunc)(LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count);
 typedef void (*HookDerivative)(LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices);
@@ -13,6 +13,7 @@ extern bool is_setup;
 extern int network_size;
 extern int batch_size;
 extern std::pair<std::vector<float>, std::vector<float>> output_buffers;
+extern std::vector<std::variant<Layer, ParametricLayer>> layers;
 struct Layer {
 	float* weights_begin;
 	size_t input;
@@ -50,6 +51,7 @@ struct ParametricLayer {
 	float* forward(float* inputs, int batch_count, std::vector<int>& batch_sizes);
 	#ifdef TRAINING_ON
 	float* previous_inputs;
+	float* previous_preactivations;
 	float* weight_gradients;
 	float* output_pointer;
 	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices);

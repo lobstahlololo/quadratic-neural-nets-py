@@ -60,7 +60,7 @@ inline int sample_from_probabilities(const float* probabilities, int vocab_size)
 	}
 	return vocab_size - 1;
 }
-inline std::vector<int> generate_tokens(const std::vector<Layer>& layers, const std::unordered_map<std::string, int>& vocabulary, const std::vector<int>& initial_tokens, int tokens_to_generate, int buffer_multiplier) {
+inline std::vector<int> generate_tokens(std::vector<std::variant<Layer, ParametricLayer>>& layers, const std::unordered_map<std::string, int>& vocabulary, const std::vector<int>& initial_tokens, int tokens_to_generate, int buffer_multiplier) {
 	std::vector<int> generated = initial_tokens;
 	std::vector<int> current_sequence = initial_tokens;
 	int vocab_size = vocabulary.size();
@@ -76,10 +76,19 @@ inline std::vector<int> generate_tokens(const std::vector<Layer>& layers, const 
 		int batch_count = 1;
 		float* output_ptr = input_floats.data();
 		for (size_t i = 0; i < layers.size(); ++i) {
-			output_ptr = layers[i].forward(output_ptr, batch_count, batch_sizes);
+			if (auto* layer_ptr = std::get_if<Layer>(&layers[i])) {
+				output_ptr = layer_ptr->forward(output_ptr, batch_count, batch_sizes);
+			} else if (auto* param_ptr = std::get_if<ParametricLayer>(&layers[i])) {
+				output_ptr = param_ptr->forward(output_ptr, batch_count, batch_sizes);
+			}
 		}
-		int total_outputs = layers.back().output * current_sequence.size();
-		int next_token = sample_from_probabilities(output_ptr + (current_sequence.size() - 1) * layers.back().output, vocab_size);
+		int last_layer_output = 0;
+		if (auto* layer_ptr = std::get_if<Layer>(&layers.back())) {
+			last_layer_output = layer_ptr->output;
+		} else if (auto* param_ptr = std::get_if<ParametricLayer>(&layers.back())) {
+			last_layer_output = param_ptr->output;
+		}
+		int next_token = sample_from_probabilities(output_ptr + (current_sequence.size() - 1) * last_layer_output, vocab_size);
 		generated.push_back(next_token);
 		current_sequence.push_back(next_token);
 	}

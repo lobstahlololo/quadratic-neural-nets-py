@@ -11,7 +11,7 @@ std::pair<std::vector<float>, std::vector<float>> output_buffers;
 std::vector<float> squared_inputs_buffer;
 std::vector<float> weights;
 std::vector<float> global_scratch_buffer;
-std::vector<Layer> layers;
+std::vector<std::variant<Layer, ParametricLayer>> layers;
 std::vector<int> layer_sizes;
 #ifdef TRAINING_ON
 std::vector<float> global_inputs;
@@ -52,7 +52,9 @@ float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_si
 	}
 	if (!forward_hooks.empty()) {
 		LayerRef self(this);
+		#ifdef TRAINING_ON
 		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, previous_preactivations);
+		#endif
 		for (auto& hook : forward_hooks) {
 			hook(self, batch_count, batch_sizes, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
 		}
@@ -67,6 +69,9 @@ float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_si
 float* ParametricLayer::forward(float* inputs, int batch_count, std::vector<int>& batch_sizes) {
 	int total_rows = 0;
 	for (int s : batch_sizes) total_rows += s;
+	#ifdef TRAINING_ON
+	previous_preactivations = output_buffers.first.data();
+	#endif
 	if (forward_hooks.empty()) {
 		return inputs;
 	}
@@ -121,7 +126,7 @@ float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std:
 	if (!forward_hook_derivatives.empty()) {
 		LayerRef self(this);
 		for (auto& derivHook : forward_hook_derivatives) {
-			derivHook(self, batch_count, batch_sizes, previous_inputs, upstream_gradient, output_buffers.first.data(), input, correct_indices);
+			derivHook(self, batch_count, batch_sizes, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), input, correct_indices);
 		}
 	}
 	return output_buffers.first.data();
@@ -200,50 +205,73 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 	std::size_t gradient_offset = 0;
 	std::size_t scratch_offset = 0;
 	for (std::size_t i = 0; i < layersAdd.size(); ++i) {
-		Layer layer;
-		for (auto& h : layersAdd[i].hooks) {
-			layer.forward_hooks.push_back(h);
-		}
-		for (auto& hd : layersAdd[i].hook_gradients) {
-			layer.forward_hook_derivatives.push_back(hd);
-		}
-		layer.neurons = layersAdd[i].layer_size;
-		if (i == 0) {
-			layer.input = layersAdd[i].layer_size;
+		if (layersAdd[i].kind == Parametric) {
+			ParametricLayer layer;
+			for (auto& h : layersAdd[i].hooks) layer.forward_hooks.push_back(h);
+			for (auto& hd : layersAdd[i].hook_gradients) layer.forward_hook_derivatives.push_back(hd);
+			layer.extra_args = layersAdd[i].extra_args;
+			layer.input = (i == 0) ? layersAdd[i].layer_size : layersAdd[i-1].layer_size;
 			layer.output = layersAdd[i].layer_size;
-			layer.size = 0;
-			layer.weights_begin = weight_start;
-		} else {
-			layer.input = layersAdd[i-1].layer_size;
-			layer.output = layersAdd[i].layer_size;
-			if (layersAdd[i].kind == Parametric) {
-				layer.size = layer.input * layersAdd[i].weights_per_input;
-				layer.weights_begin = weight_start + accumulated_weights;
+			layer.weights_per_input = layersAdd[i].weights_per_input;
+			layer.weights_begin = (i == 0) ? weight_start : weight_start + accumulated_weights;
+			layer.scratch_size = layersAdd[i].scratch_size;
+			layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
+			scratch_offset += layer.scratch_size;
+			size_t output_data_size = layer.output * max_token_count;
+			#ifdef TRAINING_ON
+			layer.previous_preactivations = global_preactivations.data() + previous_output_offset;
+			layer.weight_gradients = global_grads.data() + gradient_offset;
+			layer.output_pointer = global_inputs.data() + previous_output_offset;
+			if (i > 0) {
+				layer.previous_inputs = std::visit([](auto& l) -> float* { return l.output_pointer; }, layers.back());
 			} else {
+				layer.previous_inputs = nullptr;
+			}
+			#endif
+			layers.push_back(layer);
+			previous_output_offset += output_data_size;
+			if (i > 0) {
+				size_t param_size = layer.input * layer.weights_per_input;
+				gradient_offset += param_size;
+				accumulated_weights += param_size;
+			}
+		} else {
+			Layer layer;
+			for (auto& h : layersAdd[i].hooks) layer.forward_hooks.push_back(h);
+			for (auto& hd : layersAdd[i].hook_gradients) layer.forward_hook_derivatives.push_back(hd);
+			layer.neurons = layersAdd[i].layer_size;
+			layer.extra_args = layersAdd[i].extra_args;
+			if (i == 0) {
+				layer.input = layersAdd[i].layer_size;
+				layer.output = layersAdd[i].layer_size;
+				layer.size = 0;
+				layer.weights_begin = weight_start;
+			} else {
+				layer.input = layersAdd[i-1].layer_size;
+				layer.output = layersAdd[i].layer_size;
 				layer.size = layersAdd[i].layer_size + layersAdd[i].layer_size * layersAdd[i-1].layer_size * 2;
 				layer.weights_begin = weight_start + accumulated_weights;
 			}
-		}
-		size_t output_data_size = layer.output * max_token_count;
-		layer.extra_args = layersAdd[i].extra_args;
-		layer.scratch_size = layersAdd[i].scratch_size;
-		layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
-		scratch_offset += layer.scratch_size;
-		#ifdef TRAINING_ON
-		layer.previous_preactivations = global_preactivations.data() + previous_output_offset;
-		layer.weight_gradients = global_grads.data() + gradient_offset;
-		layer.output_pointer = global_inputs.data() + previous_output_offset;
-		if (i > 0) {
-			layer.previous_inputs = layers.back().output_pointer;
-		} else {
-			layer.previous_inputs = nullptr;
-		}
-		#endif
-		layers.push_back(layer);
-		previous_output_offset += output_data_size;
-		if (i > 0) {
-			gradient_offset += layer.size;
-			accumulated_weights += layer.size;
+			size_t output_data_size = layer.output * max_token_count;
+			layer.scratch_size = layersAdd[i].scratch_size;
+			layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
+			scratch_offset += layer.scratch_size;
+			#ifdef TRAINING_ON
+			layer.previous_preactivations = global_preactivations.data() + previous_output_offset;
+			layer.weight_gradients = global_grads.data() + gradient_offset;
+			layer.output_pointer = global_inputs.data() + previous_output_offset;
+			if (i > 0) {
+				layer.previous_inputs = std::visit([](auto& l) -> float* { return l.output_pointer; }, layers.back());
+			} else {
+				layer.previous_inputs = nullptr;
+			}
+			#endif
+			layers.push_back(layer);
+			previous_output_offset += output_data_size;
+			if (i > 0) {
+				gradient_offset += layer.size;
+				accumulated_weights += layer.size;
+			}
 		}
 	}
 	is_setup = true;
@@ -255,7 +283,7 @@ void save_weights(std::string path) {
 	if (!file) {
 		throw std::runtime_error("wrong filepath");
 	}
-	file.write(reinterpret_cast<const char*>(weights), network_size * sizeof(float));
+	file.write(reinterpret_cast<const char*>(weights.data()), network_size * sizeof(float));
 	
 
 }

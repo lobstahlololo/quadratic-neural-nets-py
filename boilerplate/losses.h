@@ -2,7 +2,7 @@
 #define BOILERPLATE_LOSSES_H
 #include <vector>
 #include <cmath>
-float MeanSquaredErrorLoss(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
+inline float MeanSquaredErrorLoss(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
 	float sum = 0.0f;
 	for (int i = 0; i < size; ++i) {
 		float diff = predicted[i] - required[i];
@@ -10,13 +10,13 @@ float MeanSquaredErrorLoss(const float* predicted, const float* required, const 
 	}
 	return sum / size;
 }
-void MeanSquaredErrorLossDerivative(float loss, const float* predicted, const float* required, const std::vector<int>& required_indices, float* output, int size) {
+inline void MeanSquaredErrorLossDerivative(float loss, const float* predicted, const float* required, const std::vector<int>& required_indices, float* output, int size) {
 	float scale = 2.0f / size;
 	for (int i = 0; i < size; ++i) {
 		output[i] = scale * (predicted[i] - required[i]);
 	}
 }
-float CrossEntropyLoss(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
+inline float CrossEntropyLoss(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
 	float total_loss = 0.0f;
 	int batch_size = required_indices.size();
 	for (int i = 0; i < batch_size; ++i) {
@@ -25,7 +25,7 @@ float CrossEntropyLoss(const float* predicted, const float* required, const std:
 	}
 	return total_loss / batch_size;
 }
-void CrossEntropyLossDerivative(float loss, const float* predicted, const float* required, const std::vector<int>& required_indices, float* output, int size) {
+inline void CrossEntropyLossDerivative(float loss, const float* predicted, const float* required, const std::vector<int>& required_indices, float* output, int size) {
 	int batch_size = required_indices.size();
 	for (int i = 0; i < batch_size; ++i) {
 		for (int j = 0; j < size; ++j) {
@@ -38,7 +38,7 @@ void CrossEntropyLossDerivative(float loss, const float* predicted, const float*
 		output[i] *= inv_batch;
 	}
 }
-float CrossEntropyLossForSoftmax(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
+inline float CrossEntropyLossForSoftmax(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
 	float total_loss = 0.0f;
 	int batch_size = required_indices.size();
 	for (int i = 0; i < batch_size; ++i) {
@@ -47,7 +47,7 @@ float CrossEntropyLossForSoftmax(const float* predicted, const float* required, 
 	}
 	return total_loss / batch_size;
 }
-void CrossEntropyLossForSoftmaxDerivative(float loss, const float* predicted, const float* required, const std::vector<int>& required_indices, float* output, int size) {
+inline void CrossEntropyLossForSoftmaxDerivative(float loss, const float* predicted, const float* required, const std::vector<int>& required_indices, float* output, int size) {
 	int total = size * required_indices.size();
 	for (int i = 0; i < total; ++i) {
 		output[i] = predicted[i];
