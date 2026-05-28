@@ -6,8 +6,8 @@
 #include <variant>
 struct LayerArgs;
 typedef std::variant<struct Layer*, struct ParametricLayer*> LayerRef;
-typedef void (*HookFunc)(LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count);
-typedef void (*HookDerivative)(LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices);
+typedef void (*HookFunc)(LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count);
+typedef void (*HookDerivative)(LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices);
 typedef void (*WeightInitFunc)(float* weights, int total_size, const std::vector<LayerArgs>& layers);
 extern bool is_setup;
 extern int network_size;
@@ -15,13 +15,13 @@ extern int batch_size;
 extern std::pair<std::vector<float>, std::vector<float>> output_buffers;
 extern std::vector<std::variant<Layer, ParametricLayer>> layers;
 struct Layer {
-	float* weights_begin;
-	size_t input;
-	size_t output;
-	size_t size;
-	size_t neurons;
-	float* scratch_pointer;
-	int scratch_size;
+	float* weights_begin = nullptr;
+	size_t input = 0;
+	size_t output = 0;
+	size_t size = 0;
+	size_t neurons = 0;
+	float* scratch_pointer = nullptr;
+	int scratch_size = 0;
 	std::vector<int> extra_args;
 	std::vector<HookFunc> forward_hooks;
 	std::vector<HookDerivative> forward_hook_derivatives;
@@ -29,32 +29,32 @@ struct Layer {
 	float* linear() { return weights_begin + (size - neurons) / 2; }
 	float* biases() { return weights_begin + (size - neurons); }
 	size_t weight_count() const { return input * output * 2; }
-	float* forward(float* inputs, int batch_count, std::vector<int>& batch_sizes);
+	float* forward(float* inputs, int batch_count, std::vector<int>& sequence_lengths);
 	#ifdef TRAINING_ON
-	float* previous_inputs;
-	float* previous_preactivations;
-	float* weight_gradients;
-	float* output_pointer;
-	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices);
+	float* previous_inputs = nullptr;
+	float* previous_preactivations = nullptr;
+	float* weight_gradients = nullptr;
+	float* output_pointer = nullptr;
+	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices);
 	#endif
 };
 struct ParametricLayer {
-	float* weights_begin;
-	size_t input;
-	size_t output;
-	int weights_per_input;
-	float* scratch_pointer;
-	int scratch_size;
+	float* weights_begin = nullptr;
+	size_t input = 0;
+	size_t output = 0;
+	int weights_per_input = 0;
+	float* scratch_pointer = nullptr;
+	int scratch_size = 0;
 	std::vector<int> extra_args;
 	std::vector<HookFunc> forward_hooks;
 	std::vector<HookDerivative> forward_hook_derivatives;
-	float* forward(float* inputs, int batch_count, std::vector<int>& batch_sizes);
+	float* forward(float* inputs, int batch_count, std::vector<int>& sequence_lengths);
 	#ifdef TRAINING_ON
-	float* previous_inputs;
-	float* previous_preactivations;
-	float* weight_gradients;
-	float* output_pointer;
-	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices);
+	float* previous_inputs = nullptr;
+	float* previous_preactivations = nullptr;
+	float* weight_gradients = nullptr;
+	float* output_pointer = nullptr;
+	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices);
 	#endif
 };
 enum LayerKind { Quadratic, Parametric };

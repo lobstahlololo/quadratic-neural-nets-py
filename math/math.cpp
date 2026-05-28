@@ -128,15 +128,62 @@ naive_fallback:
     return;
 naive_fallback:
 #endif
-for (int row = 0; row < rows_a; ++row) {
-        for (int col = 0; col < cols_b; ++col) {
-            float sum = 0.0f;
-            for (int inner = 0; inner < inner_dimension; ++inner) {
-                float a_val = transpose_a ? matrix_a[inner * rows_a + row] : matrix_a[row * inner_dimension + inner];
-                float b_val = transpose_b ? matrix_b[col * inner_dimension + inner] : matrix_b[inner * cols_b + col];
-                sum += a_val * b_val;
+    if (!transpose_a && !transpose_b) {
+        if (beta == 0.0f) {
+            for (int i = 0; i < rows_a * cols_b; ++i) {
+                result[i] = 0.0f;
             }
-            result[row * cols_b + col] = beta * result[row * cols_b + col] + alpha * sum;
+        } else if (beta != 1.0f) {
+            for (int i = 0; i < rows_a * cols_b; ++i) {
+                result[i] *= beta;
+            }
         }
-}
+        for (int i = 0; i < rows_a; ++i) {
+            for (int k = 0; k < inner_dimension; ++k) {
+                float term = alpha * matrix_a[i * inner_dimension + k];
+                for (int j = 0; j < cols_b; ++j) {
+                    result[i * cols_b + j] += term * matrix_b[k * cols_b + j];
+                }
+            }
+        }
+    } else if (!transpose_a && transpose_b) {
+        for (int i = 0; i < rows_a; ++i) {
+            for (int j = 0; j < cols_b; ++j) {
+                float accumulator = 0.0f;
+                for (int k = 0; k < inner_dimension; ++k) {
+                    accumulator += matrix_a[i * inner_dimension + k] * matrix_b[j * inner_dimension + k];
+                }
+                result[i * cols_b + j] = beta * result[i * cols_b + j] + alpha * accumulator;
+            }
+        }
+    } else if (transpose_a && !transpose_b) {
+        if (beta == 0.0f) {
+            for (int i = 0; i < rows_a * cols_b; ++i) {
+                result[i] = 0.0f;
+            }
+        } else if (beta != 1.0f) {
+            for (int i = 0; i < rows_a * cols_b; ++i) {
+                result[i] *= beta;
+            }
+        }
+        for (int k = 0; k < inner_dimension; ++k) {
+            for (int i = 0; i < rows_a; ++i) {
+                float term = alpha * matrix_a[k * rows_a + i];
+                for (int j = 0; j < cols_b; ++j) {
+                    result[i * cols_b + j] += term * matrix_b[k * cols_b + j];
+                }
+            }
+        }
+    } else {
+        for (int i = 0; i < rows_a; ++i) {
+            for (int j = 0; j < cols_b; ++j) {
+                float accumulator = 0.0f;
+                for (int k = 0; k < inner_dimension; ++k) {
+                    accumulator += matrix_a[k * rows_a + i] * matrix_b[j * inner_dimension + k];
+                }
+                result[i * cols_b + j] = beta * result[i * cols_b + j] + alpha * accumulator;
+            }
+        }
+    }
+             }
 #endif

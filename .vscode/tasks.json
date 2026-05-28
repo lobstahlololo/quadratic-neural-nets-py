@@ -1,0 +1,55 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build lm_test",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-O3",
+                "-g",
+                "-fsanitize=address,undefined",
+                "-DTRAINING_ON",
+                "documentation/example_language_model.cpp",
+                "model/network.cpp",
+                "train/train.cpp",
+                "math/math.cpp",
+                "-o",
+                "documentation/lm_test"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "run lm_test",
+            "type": "shell",
+            "command": "${workspaceFolder}/documentation/lm_test",
+            "dependsOn": ["build lm_test"],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build and run lm_test",
+            "dependsOn": ["build lm_test", "run lm_test"],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        }
+    ]
+}

@@ -52,7 +52,7 @@ inline void load_vocabulary(std::unordered_map<std::string, int>& vocabulary, co
 	}
 }
 inline int sample_from_probabilities(const float* probabilities, int vocab_size) {
-	float r = static_cast<float>(rand()) / RAND_MAX;
+	float r = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 	float cumulative = 0.0f;
 	for (int i = 0; i < vocab_size; ++i) {
 		cumulative += probabilities[i];
@@ -72,14 +72,14 @@ inline std::vector<int> generate_tokens(std::vector<std::variant<Layer, Parametr
 		}
 		std::vector<float> input_floats(current_sequence.size());
 		for (size_t i = 0; i < current_sequence.size(); ++i) input_floats[i] = static_cast<float>(current_sequence[i]);
-		std::vector<int> batch_sizes = { static_cast<int>(current_sequence.size()) };
+		std::vector<int> sequence_lengths = { static_cast<int>(current_sequence.size()) };
 		int batch_count = 1;
 		float* output_ptr = input_floats.data();
 		for (size_t i = 0; i < layers.size(); ++i) {
 			if (auto* layer_ptr = std::get_if<Layer>(&layers[i])) {
-				output_ptr = layer_ptr->forward(output_ptr, batch_count, batch_sizes);
+				output_ptr = layer_ptr->forward(output_ptr, batch_count, sequence_lengths);
 			} else if (auto* param_ptr = std::get_if<ParametricLayer>(&layers[i])) {
-				output_ptr = param_ptr->forward(output_ptr, batch_count, batch_sizes);
+				output_ptr = param_ptr->forward(output_ptr, batch_count, sequence_lengths);
 			}
 		}
 		int last_layer_output = 0;

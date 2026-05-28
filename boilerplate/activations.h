@@ -10,24 +10,24 @@
 #ifndef TRAINING_ON
 std::vector<std::vector<float>> kv_cache_pool;
 #endif
-HookFunc Residual = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc Residual = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int total = feature_count;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		output_values[i] = preactivation_values[i] + original_inputs[i];
 	}
 };
-HookDerivative ResidualGradHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative ResidualGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total = feature_count;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		output_gradient[i] = upstream_gradient[i];
 	}
 };
-HookFunc NonLearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc NonLearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* input_sample = preactivation_values + offset;
 			float* output_sample = output_values + offset;
@@ -43,10 +43,10 @@ HookFunc NonLearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector
 		}
 	}
 };
-HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* raw_input = original_inputs + offset;
 			float* upstream = upstream_gradient + offset;
@@ -72,15 +72,13 @@ HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batch_co
 		}
 	}
 };
-HookFunc LearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc LearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	float* gamma = parametric_layer->weights_begin;
 	float* beta = gamma + parametric_layer->input;
 	int offset = 0;
-	std::cout << "layernorm learn" << "\n";
-	std::cout << batch_count << " batches, feature count: " << feature_count << "actual batch sizes: " << batch_sizes.size();
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* input_sample = preactivation_values + offset;
 			float* output_sample = output_values + offset;
@@ -96,7 +94,7 @@ HookFunc LearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<in
 		}
 	}
 };
-HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	float* gamma = parametric_layer->weights_begin;
 	float* beta = gamma + feature_count;
@@ -105,7 +103,7 @@ HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batch_count
 	float* beta_gradient = weight_gradients_ptr + feature_count;
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* raw_input = original_inputs + offset;
 			float* upstream = upstream_gradient + offset;
@@ -137,12 +135,12 @@ HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batch_count
 		}
 	}
 };
-HookFunc RMSNorm = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc RMSNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	float* gamma = parametric_layer->weights_begin;
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* input_sample = preactivation_values + offset;
 			float* output_sample = output_values + offset;
@@ -155,13 +153,13 @@ HookFunc RMSNorm = [](LayerRef layer, int batch_count, std::vector<int>& batch_s
 		}
 	}
 };
-HookDerivative RMSNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative RMSNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	float* gamma = parametric_layer->weights_begin;
 	float* gamma_gradient = parametric_layer->weight_gradients;
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* raw_input = original_inputs + offset;
 			float* upstream = upstream_gradient + offset;
@@ -183,82 +181,82 @@ HookDerivative RMSNormDerivative = [](LayerRef layer, int batch_count, std::vect
 		}
 	}
 };
-HookFunc TemperatureHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc TemperatureHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	const std::vector<int>& extra_args = std::visit([](auto* l) -> const std::vector<int>& { return l->extra_args; }, layer);
 	float temperature = extra_args.size() > 0 ? static_cast<float>(extra_args[0]) / 1000.0f : 0.0f;
 	if (temperature <= 0.0f) {
 		int total = 0;
-		for (int s : batch_sizes) total += s * feature_count;
+		for (int s : sequence_lengths) total += s * feature_count;
 		for (int i = 0; i < total; ++i) output_values[i] = preactivation_values[i];
 		return;
 	}
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	float inv_temp = 1.0f / temperature;
 	for (int i = 0; i < total; ++i) output_values[i] = preactivation_values[i] * inv_temp;
 };
-HookDerivative TemperatureGradHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative TemperatureGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	const std::vector<int>& extra_args = std::visit([](auto* l) -> const std::vector<int>& { return l->extra_args; }, layer);
 	float temperature = extra_args.size() > 0 ? static_cast<float>(extra_args[0]) / 1000.0f : 0.0f;
 	if (temperature <= 0.0f) {
 		int total = 0;
-		for (int s : batch_sizes) total += s * feature_count;
+		for (int s : sequence_lengths) total += s * feature_count;
 		for (int i = 0; i < total; ++i) output_gradient[i] = upstream_gradient[i];
 		return;
 	}
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	float inv_temp = 1.0f / temperature;
 	for (int i = 0; i < total; ++i) output_gradient[i] = upstream_gradient[i] * inv_temp;
 };
-HookFunc ReLuHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc ReLuHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		output_values[i] = preactivation_values[i] > 0.0f ? preactivation_values[i] : 0.0f;
 	}
 };
-HookDerivative ReLuGradHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative ReLuGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		output_gradient[i] = upstream_gradient[i] * (preactivation_values[i] > 0.0f ? 1.0f : 0.0f);
 	}
 };
-HookFunc SigmoidHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc SigmoidHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		output_values[i] = 1.0f / (1.0f + std::exp(-preactivation_values[i]));
 	}
 };
-HookDerivative SigmoidGradHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative SigmoidGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		float sig = 1.0f / (1.0f + std::exp(-preactivation_values[i]));
 		output_gradient[i] = upstream_gradient[i] * sig * (1.0f - sig);
 	}
 };
-HookFunc TanhHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc TanhHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		output_values[i] = std::tanh(preactivation_values[i]);
 	}
 };
-HookDerivative TanhGradHook = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative TanhGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total = 0;
-	for (int s : batch_sizes) total += s * feature_count;
+	for (int s : sequence_lengths) total += s * feature_count;
 	for (int i = 0; i < total; ++i) {
 		float t = std::tanh(preactivation_values[i]);
 		output_gradient[i] = upstream_gradient[i] * (1.0f - t * t);
 	}
 };
-HookFunc Softmax = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc Softmax = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
-		int rows = batch_sizes[b];
+		int rows = sequence_lengths[b];
 		for (int r = 0; r < rows; ++r) {
 			float* input_sample = preactivation_values + offset;
 			float* output_sample = output_values + offset;
@@ -271,9 +269,9 @@ HookFunc Softmax = [](LayerRef layer, int batch_count, std::vector<int>& batch_s
 		}
 	}
 };
-HookDerivative SoftmaxDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative SoftmaxDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	std::vector<float> softmax_values(total_rows * feature_count);
 	for (int i = 0; i < total_rows; ++i) {
 		float* inp = preactivation_values + i * feature_count;
@@ -293,9 +291,9 @@ HookDerivative SoftmaxDerivative = [](LayerRef layer, int batch_count, std::vect
 		for (int j = 0; j < feature_count; ++j) out[j] = up[j] * soft[j] - soft[j] * soft[correct_token] * grad_at_correct;
 	}
 };
-HookDerivative SoftmaxForCrossEntropyLossDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative SoftmaxForCrossEntropyLossDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	for (int i = 0; i < total_rows; ++i) {
 		int correct_token = correct_indices[i];
 		float* logit_sample = preactivation_values + i * feature_count;
@@ -308,11 +306,11 @@ HookDerivative SoftmaxForCrossEntropyLossDerivative = [](LayerRef layer, int bat
 		out_sample[correct_token] -= 1.0f;
 	}
 };
-HookFunc EmbeddingForward = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc EmbeddingForward = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
-	int embedding_dimension = feature_count;
+	int embedding_dimension = parametric_layer->output;
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	for (int i = 0; i < total_rows; ++i) {
 		int token_index = static_cast<int>(original_inputs[i]);
 		float* weight_row = parametric_layer->weights_begin + token_index * embedding_dimension;
@@ -320,21 +318,21 @@ HookFunc EmbeddingForward = [](LayerRef layer, int batch_count, std::vector<int>
 		for (int j = 0; j < embedding_dimension; ++j) output_row[j] = weight_row[j];
 	}
 };
-HookDerivative EmbeddingDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative EmbeddingDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
-	int embedding_dimension = feature_count;
+	int embedding_dimension = parametric_layer->output;
 	float* weight_gradients_ptr = parametric_layer->weight_gradients;
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	for (int i = 0; i < total_rows; ++i) {
 		int token_index = static_cast<int>(original_inputs[i]);
 		float* gradient_row = weight_gradients_ptr + token_index * embedding_dimension;
 		float* upstream_row = upstream_gradient + i * embedding_dimension;
 		for (int j = 0; j < embedding_dimension; ++j) gradient_row[j] += upstream_row[j];
 	}
-	for (int i = 0; i < total_rows * embedding_dimension; ++i) output_gradient[i] = 0.0f;
+	for (int i = 0; i < total_rows * parametric_layer->input; ++i) output_gradient[i] = 0.0f;
 };
-HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = feature_count;
 	int max_seq_len = parametric_layer->extra_args[0];
@@ -350,7 +348,7 @@ HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
 	int offset = 0;
 	for (int seq = 0; seq < batch_count; ++seq) {
-		int actual_len = batch_sizes[seq];
+		int actual_len = sequence_lengths[seq];
 		stored_lengths[seq] = static_cast<float>(actual_len);
 		float* seq_input = preactivation_values + offset;
 		float* seq_output = output_values + offset;
@@ -390,10 +388,10 @@ HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>
 		}
 		matmult(attention_scores, value, seq_output, max_seq_len, max_seq_len, embedding_dimension, false, false, 1.0f, 0.0f);
 		offset += max_seq_len * embedding_dimension;
-		batch_sizes[seq] = actual_len;
+		sequence_lengths[seq] = actual_len;
 	}
 };
-HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = feature_count;
 	int max_seq_len = parametric_layer->extra_args[0];
@@ -403,19 +401,19 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::ve
 	float* key_weights = weight_matrix + embedding_dimension * embedding_dimension;
 	float* value_weights = weight_matrix + 2 * embedding_dimension * embedding_dimension;
 	float* scratch = parametric_layer->scratch_pointer;
-	float* query = scratch;
-	float* key = query + max_seq_len * embedding_dimension;
-	float* temporary_buffer = key + max_seq_len * embedding_dimension;
-	float* attention_scores = temporary_buffer + max_seq_len * embedding_dimension;
-	float* score_gradients = attention_scores + max_seq_len * max_seq_len;
-	float* stored_lengths = score_gradients + max_seq_len * max_seq_len;
-	float* full_upstream = stored_lengths + batch_count;
+	float* query = scratch; //max seq len * em
+	float* key = query + max_seq_len * embedding_dimension; // max seq len * em
+	float* temporary_buffer = key + max_seq_len * embedding_dimension; // max seq len * em, can be used for value gradients or attention score gradients
+	float* attention_scores = temporary_buffer + max_seq_len * embedding_dimension; // max seq len * max seq len
+	float* score_gradients = attention_scores + max_seq_len * max_seq_len; // max seq len * max seq len, can be used for upstream reduced to seq len * em or for storing gradients of attention scores
+	float* stored_lengths = score_gradients + max_seq_len * max_seq_len; //batch count
+	float* full_upstream = stored_lengths + batch_count; // max seq len * em
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
 	int offset = 0;
 	int upstream_offset = 0;
 	for (int seq = 0; seq < batch_count; ++seq) {
 		int original_len = static_cast<int>(stored_lengths[seq]);
-		int actual_len = batch_sizes[seq];
+		int actual_len = sequence_lengths[seq];
 		float* seq_input = input_embeddings + offset;
 		float* seq_upstream_reduced = upstream_gradient + upstream_offset;
 		float* seq_output_grad = output_gradient + offset;
@@ -478,13 +476,13 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::ve
 		matmult(query_gradient, query_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
 		matmult(key_gradient, key_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
 		matmult(value_gradient, value_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
-		batch_sizes[seq] = original_len;
+		sequence_lengths[seq] = original_len;
 		offset += max_seq_len * embedding_dimension;
 		upstream_offset += actual_len * embedding_dimension;
 	}
 };
 #ifndef TRAINING_ON
-HookFunc AttentionForwardWithCache = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+HookFunc AttentionForwardWithCache = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = feature_count;
 	int max_seq_len = parametric_layer->extra_args[0];
@@ -501,7 +499,7 @@ HookFunc AttentionForwardWithCache = [](LayerRef layer, int batch_count, std::ve
 	std::vector<float>& cache = kv_cache_pool[kv_cache_idx];
 	int offset = 0;
 	for (int seq = 0; seq < batch_count; ++seq) {
-		int actual_len = batch_sizes[seq];
+		int actual_len = sequence_lengths[seq];
 		float* seq_input = preactivation_values + offset;
 		float* seq_output = output_values + offset;
 		matmult(seq_input, query_weights, query, actual_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
@@ -537,7 +535,7 @@ HookFunc AttentionForwardWithCache = [](LayerRef layer, int batch_count, std::ve
 		offset += max_seq_len * embedding_dimension;
 	}
 };
-HookDerivative AttentionDerivativeWithCache = [](LayerRef layer, int batch_count, std::vector<int>& batch_sizes, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+HookDerivative AttentionDerivativeWithCache = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 };
 #endif
 #endif

@@ -35,6 +35,7 @@ inline void CrossEntropyLossDerivative(float loss, const float* predicted, const
 	}
 	float inv_batch = 1.0f / batch_size;
 	for (int i = 0; i < batch_size * size; ++i) {
+		
 		output[i] *= inv_batch;
 	}
 }

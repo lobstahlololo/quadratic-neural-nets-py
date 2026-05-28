@@ -2,6 +2,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
+#include <iostream>
 #include "network.h"
 #include "../math/math.h"
 bool is_setup = false;
@@ -18,9 +19,9 @@ std::vector<float> global_inputs;
 std::vector<float> global_preactivations;
 std::vector<float> global_grads;
 #endif
-float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_sizes) {
+float* Layer::forward(float* inputs, int batch_count, std::vector<int>& sequence_lengths) {
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	if (size == 0) {
 		#ifdef TRAINING_ON
 		previous_inputs = inputs;
@@ -32,12 +33,12 @@ float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_si
 		LayerRef self(this);
 		std::copy(inputs, inputs + output * total_rows, output_buffers.second.data());
 		for (auto& hook : forward_hooks) {
-			hook(self, batch_count, batch_sizes, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
+			hook(self, batch_count, sequence_lengths, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
 		}
 		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_buffers.first.data());
-		if (output_pointer) {
+		#ifdef TRAINING_ON
 			std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_pointer);
-		}
+		#endif
 		std::fill(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, 0.0f);
 		return output_buffers.first.data();
 	}
@@ -45,20 +46,32 @@ float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_si
 	for (std::size_t i = 0; i < input * total_rows; ++i) {
 		squared_inputs_buffer[i] = in_ptr[i] * in_ptr[i];
 	}
-	matmult(linear(), inputs, output_buffers.second.data(), output, input, total_rows);
-	matmult(quadratic(), squared_inputs_buffer.data(), output_buffers.second.data(), output, input, total_rows);
-	for (std::size_t i = 0; i < output * total_rows; ++i) {
-		output_buffers.second[i] += biases()[i % output];
+	float max = 0.0f;
+	matmult(inputs, linear(), output_buffers.second.data(), total_rows, input, output, false, true, 1.0f, 0.0f);
+	matmult(squared_inputs_buffer.data(), quadratic(), output_buffers.second.data(), total_rows, input, output, false, true, 1.0f, 1.0f);
+	for (std::size_t i = 0; i < total_rows; ++i) {
+		for (std::size_t j = 0; j < output; ++j) {
+			output_buffers.second[i * output + j] += biases()[j];
+			max = std::max(max, output_buffers.second[i * output + j]);
+		}
 	}
+	// std::cout << "Max pre-activation: " << max << "\n";
 	if (!forward_hooks.empty()) {
 		LayerRef self(this);
 		#ifdef TRAINING_ON
 		std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, previous_preactivations);
 		#endif
 		for (auto& hook : forward_hooks) {
-			hook(self, batch_count, batch_sizes, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
+			hook(self, batch_count, sequence_lengths, inputs, output_buffers.second.data(), output_buffers.second.data(), output);
 		}
+		
 	}
+	//debug
+	float max_postact = 0.0f;
+	for (std::size_t i = 0; i < output * total_rows; ++i) {
+		max_postact = std::max(max_postact, output_buffers.second[i]);
+	}
+	// std::cout << "Max post-activation: " << max_postact << "\n";
 	#ifdef TRAINING_ON
 	std::copy(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, output_pointer);
 	#endif
@@ -66,9 +79,9 @@ float* Layer::forward(float* inputs, int batch_count, std::vector<int>& batch_si
 	std::fill(output_buffers.second.data(), output_buffers.second.data() + output * total_rows, 0.0f);
 	return output_buffers.first.data();
 }
-float* ParametricLayer::forward(float* inputs, int batch_count, std::vector<int>& batch_sizes) {
+float* ParametricLayer::forward(float* inputs, int batch_count, std::vector<int>& sequence_lengths) {
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	#ifdef TRAINING_ON
 	previous_preactivations = output_buffers.first.data();
 	#endif
@@ -78,61 +91,66 @@ float* ParametricLayer::forward(float* inputs, int batch_count, std::vector<int>
 	LayerRef self(this);
 	std::copy(inputs, inputs + input * total_rows, output_buffers.first.data());
 	for (auto& hook : forward_hooks) {
-		hook(self, batch_count, batch_sizes, inputs, output_buffers.first.data(), output_buffers.first.data(), input);
+		hook(self, batch_count, sequence_lengths, inputs, output_buffers.first.data(), output_buffers.first.data(), input);
 	}
-	if (output_pointer) {
+	float max = 0.0f;
+	for (std::size_t i = 0; i < input * total_rows; ++i) {
+		if (std::abs(output_buffers.first[i]) > max) max = std::abs(output_buffers.first[i]);
+	}
+	// std::cout << "Max post-activation: " << max << "\n";
+	#ifdef TRAINING_ON
 		std::copy(output_buffers.first.data(), output_buffers.first.data() + input * total_rows, output_pointer);
-	}
+	#endif
 	return output_buffers.first.data();
 }
 #ifdef TRAINING_ON
-float* Layer::backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices) {
+float* Layer::backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices) {
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
+	float* post_activation_gradient = upstream_gradient;
 	if (!forward_hook_derivatives.empty()) {
 		LayerRef self(this);
 		for (auto& derivHook : forward_hook_derivatives) {
-			derivHook(self, batch_count, batch_sizes, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), output, correct_indices);
+			derivHook(self, batch_count, sequence_lengths, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), output, correct_indices);
 		}
+		post_activation_gradient = output_buffers.first.data();
+	}
+	if (size == 0) {
+		return post_activation_gradient;
 	}
 	size_t total_weights = weight_count();
 	size_t bias_offset = total_weights;
-	std::fill(weight_gradients + bias_offset, weight_gradients + size, 0.0f);
+	std::fill(weight_gradients, weight_gradients + size, 0.0f);
 	for (size_t b = 0; b < total_rows; ++b) {
 		for (size_t n = 0; n < neurons; ++n) {
-			weight_gradients[bias_offset + n] += upstream_gradient[b * neurons + n];
+			weight_gradients[bias_offset + n] += post_activation_gradient[b * neurons + n];
 		}
 	}
-	float* post_activation_gradient = output_buffers.first.data();
 	float* scratch_data = output_buffers.second.data();
-	matmult(post_activation_gradient, previous_inputs, weight_gradients, output, total_rows, input);
-	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, total_rows, input);
-	matmult(post_activation_gradient, linear(), scratch_data, total_rows, output, input);
+	matmult(post_activation_gradient, previous_inputs, weight_gradients, output, total_rows, input, true, false, 1.0f, 1.0f);
+	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, total_rows, input, true, false, 1.0f, 1.0f);
+	matmult(post_activation_gradient, linear(), squared_inputs_buffer.data(), total_rows, output, input, false, false, 1.0f, 0.0f);
+	matmult(post_activation_gradient, quadratic(), scratch_data, total_rows, output, input, false, false, 1.0f, 0.0f);
 	for (size_t i = 0; i < input * total_rows; ++i) {
-		output_buffers.first.data()[i] = scratch_data[i];
-		scratch_data[i] = 0.0f;
-	}
-	matmult(post_activation_gradient, quadratic(), scratch_data, total_rows, output, input);
-	for (size_t i = 0; i < input * total_rows; ++i) {
-		output_buffers.first.data()[i] += 2.0f * previous_inputs[i] * scratch_data[i];
+		output_buffers.first.data()[i] = squared_inputs_buffer[i] + 2.0f * previous_inputs[i] * scratch_data[i];
 	}
 	return output_buffers.first.data();
 }
-float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std::vector<int>& batch_sizes, const std::vector<int>& correct_indices) {
+float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices) {
 	int total_rows = 0;
-	for (int s : batch_sizes) total_rows += s;
+	for (int s : sequence_lengths) total_rows += s;
 	size_t weight_count = input * weights_per_input;
 	std::fill(weight_gradients, weight_gradients + weight_count, 0.0f);
 	if (!forward_hook_derivatives.empty()) {
 		LayerRef self(this);
 		for (auto& derivHook : forward_hook_derivatives) {
-			derivHook(self, batch_count, batch_sizes, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), input, correct_indices);
+			derivHook(self, batch_count, sequence_lengths, previous_inputs, previous_preactivations, upstream_gradient, output_buffers.first.data(), input, correct_indices);
 		}
+		return output_buffers.first.data();
 	}
-	return output_buffers.first.data();
+	return upstream_gradient;
 }
 #endif
-
 void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int buffer_multiplier) {
 	layers.clear();
 	weights.clear();
@@ -141,10 +159,12 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 	network_size = 0;
 	int max_token_count = batch_size * buffer_multiplier;
 	int maximum_buffer_size = 0;
+	int total_output_tokens = 0;
 	LayerArgs* prev = nullptr;
 	for (auto& args : layersAdd) {
 		maximum_neurons = std::max(maximum_neurons, args.layer_size);
 		int token_capacity = args.layer_size * max_token_count;
+		total_output_tokens += token_capacity;
 		if (token_capacity > maximum_buffer_size) maximum_buffer_size = token_capacity;
 		if (prev == nullptr) {
 			layer_sizes.push_back(args.layer_size);
@@ -164,21 +184,13 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 		output_buffers.second.resize(size);
 	};
 	resizeBuffers(maximum_buffer_size);
-	size_t maximum_squared_input_size = 0;
-	for (size_t i = 0; i < layersAdd.size(); ++i) {
-		if (i > 0 && layersAdd[i].kind != Parametric) {
-			size_t input_size = layersAdd[i-1].layer_size;
-			size_t needed = input_size * max_token_count;
-			if (needed > maximum_squared_input_size) maximum_squared_input_size = needed;
-		}
-	}
-	squared_inputs_buffer.resize(maximum_squared_input_size);
+	squared_inputs_buffer.resize(maximum_buffer_size);
 	size_t total_scratch = 0;
 	for (auto& args : layersAdd) total_scratch += args.scratch_size;
 	global_scratch_buffer.resize(total_scratch);
 	#ifdef TRAINING_ON
-	global_inputs.resize(maximum_neurons * max_token_count);
-	global_preactivations.resize(maximum_neurons * max_token_count);
+	global_inputs.resize(total_output_tokens);
+	global_preactivations.resize(total_output_tokens);
 	global_grads.resize(network_size);
 	#endif
 	weights.resize(network_size);
@@ -245,12 +257,18 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 				layer.input = layersAdd[i].layer_size;
 				layer.output = layersAdd[i].layer_size;
 				layer.size = 0;
+				layer.neurons = layersAdd[i].layer_size;
 				layer.weights_begin = weight_start;
+				layer.scratch_size = 0;
+				layer.scratch_pointer = nullptr;
 			} else {
 				layer.input = layersAdd[i-1].layer_size;
 				layer.output = layersAdd[i].layer_size;
 				layer.size = layersAdd[i].layer_size + layersAdd[i].layer_size * layersAdd[i-1].layer_size * 2;
 				layer.weights_begin = weight_start + accumulated_weights;
+				layer.scratch_size = layersAdd[i].scratch_size;
+				layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
+				scratch_offset += layer.scratch_size;
 			}
 			size_t output_data_size = layer.output * max_token_count;
 			layer.scratch_size = layersAdd[i].scratch_size;

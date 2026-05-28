@@ -16,7 +16,7 @@ inline void xavier_initialisation(float* weights, int total_size, const std::vec
 		if (current.kind == Parametric) {
 			int weights_count = input_dimension * current.weights_per_input;
 			for (int i = 0; i < weights_count; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
 			}
 			weight_index += weights_count;
@@ -25,17 +25,17 @@ inline void xavier_initialisation(float* weights, int total_size, const std::vec
 			int lin_weights = quad_weights;
 			int bias_weights = output_dimension;
 			for (int i = 0; i < quad_weights; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * quad_scale;
 			}
 			weight_index += quad_weights;
 			for (int i = 0; i < lin_weights; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
 			}
 			weight_index += lin_weights;
 			for (int i = 0; i < bias_weights; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
 			}
 			weight_index += bias_weights;
@@ -54,7 +54,7 @@ inline void he_initialisation(float* weights, int total_size, const std::vector<
 		if (current.kind == Parametric) {
 			int weights_count = input_dimension * current.weights_per_input;
 			for (int i = 0; i < weights_count; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
 			}
 			weight_index += weights_count;
@@ -63,17 +63,17 @@ inline void he_initialisation(float* weights, int total_size, const std::vector<
 			int lin_weights = quad_weights;
 			int bias_weights = output_dimension;
 			for (int i = 0; i < quad_weights; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * quad_scale;
 			}
 			weight_index += quad_weights;
 			for (int i = 0; i < lin_weights; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
 			}
 			weight_index += lin_weights;
 			for (int i = 0; i < bias_weights; ++i) {
-				float random_value = static_cast<float>(rand()) / RAND_MAX;
+				float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 				weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
 			}
 			weight_index += bias_weights;
@@ -82,12 +82,11 @@ inline void he_initialisation(float* weights, int total_size, const std::vector<
 }
 inline void uniform_random_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
 	for (int i = 0; i < total_size; ++i) {
-		float random_value = static_cast<float>(rand()) / RAND_MAX;
+		float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
 		weights[i] = random_value - 0.5f;
 	}
 }
 inline void zero_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
 	std::fill(weights, weights + total_size, 0.0f);
-	
 }
 #endif

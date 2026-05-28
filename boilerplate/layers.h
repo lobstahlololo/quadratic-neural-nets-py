@@ -3,6 +3,14 @@
 #include "../model/network.h"
 #include "activations.h"
 #include <vector>
+#include <iostream>
+inline LayerArgs InputLayer(int input_dimension) {
+	LayerArgs args;
+	args.layer_size = input_dimension;
+	args.kind = Quadratic;
+	args.scratch_size = 0;
+	return args;
+}
 inline LayerArgs SoftmaxLayer(int model_dimension) {
 	LayerArgs args;
 	args.layer_size = model_dimension;
@@ -47,7 +55,7 @@ inline LayerArgs AttentionLayer(int embedding_dimension, int max_sequence_length
 	args.layer_size = embedding_dimension;
 	args.kind = Parametric;
 	args.weights_per_input = 3 * embedding_dimension;
-	args.scratch_size = 2 * max_sequence_length * max_sequence_length + 4 * max_sequence_length * embedding_dimension + batch_size;
+	args.scratch_size = 2 * max_sequence_length * max_sequence_length + 4 * max_sequence_length * embedding_dimension + batch_size + 1;
 	args.extra_args = { max_sequence_length };
 #ifndef TRAINING_ON
 	if (use_kv_cache) {
