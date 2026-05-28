@@ -19,10 +19,10 @@ int main() {
     int target_vocab_size = 256;
     int embedding_dimension = 64;
     int sequence_length = 16;
-    int stride = 1;
+    int stride = 16;
     int sequences_per_batch = 8;
-    int total_epochs = 30;
-    float learning_rate = 0.001f;
+    int total_epochs = 1000;
+    float learning_rate = 0.1f;
     float min_learning_rate = 0.0001f;
     int tokens_to_generate = 100;
 
