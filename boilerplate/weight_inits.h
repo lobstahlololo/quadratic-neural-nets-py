@@ -40,6 +40,11 @@ inline void xavier_initialisation(float* weights, int total_size, const std::vec
 			}
 			weight_index += bias_weights;
 		}
+		for (int i = 0; i < current.extra_weights; ++i) {
+			float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+			weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
+		}
+		weight_index += current.extra_weights;
 	}
 }
 inline void he_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {
@@ -78,6 +83,11 @@ inline void he_initialisation(float* weights, int total_size, const std::vector<
 			}
 			weight_index += bias_weights;
 		}
+		for (int i = 0; i < current.extra_weights; ++i) {
+			float random_value = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
+			weights[weight_index + i] = (random_value * 2.0f - 1.0f) * base_scale;
+		}
+		weight_index += current.extra_weights;
 	}
 }
 inline void uniform_random_initialisation(float* weights, int total_size, const std::vector<LayerArgs>& layers) {

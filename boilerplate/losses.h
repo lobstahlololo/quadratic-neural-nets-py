@@ -5,8 +5,8 @@
 inline float MeanSquaredErrorLoss(const float* predicted, const float* required, const std::vector<int>& required_indices, int size) {
 	float sum = 0.0f;
 	for (int i = 0; i < size; ++i) {
-		float diff = predicted[i] - required[i];
-		sum += diff * diff;
+		float prediction_difference = predicted[i] - required[i];
+		sum += prediction_difference * prediction_difference;
 	}
 	return sum / size;
 }

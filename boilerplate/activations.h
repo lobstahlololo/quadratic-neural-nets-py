@@ -5,551 +5,577 @@
 #include <algorithm>
 #include <variant>
 #include <vector>
-
 #include <iostream>
 #ifndef TRAINING_ON
 std::vector<std::vector<float>> kv_cache_pool;
 #endif
 HookFunc Residual = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	int total = feature_count;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		output_values[i] = preactivation_values[i] + original_inputs[i];
+	int total_feature_elements = feature_count;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		output_values[element_index] = preactivation_values[element_index] + original_inputs[element_index];
 	}
 };
 HookDerivative ResidualGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int total = feature_count;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		output_gradient[i] = upstream_gradient[i];
+	int total_feature_elements = feature_count;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		output_gradient[element_index] = upstream_gradient[element_index];
 	}
 };
 HookFunc NonLearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* input_sample = preactivation_values + offset;
-			float* output_sample = output_values + offset;
-			float mean = 0.0f;
-			for (int i = 0; i < feature_count; ++i) mean += input_sample[i];
-			mean /= feature_count;
-			float variance = 0.0f;
-			for (int i = 0; i < feature_count; ++i) variance += (input_sample[i] - mean) * (input_sample[i] - mean);
-			variance /= feature_count;
-			float inverse_std_dev = 1.0f / std::sqrt(variance + 1e-5f);
-			for (int i = 0; i < feature_count; ++i) output_sample[i] = (input_sample[i] - mean) * inverse_std_dev;
-			offset += feature_count;
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* input_sample = preactivation_values + current_offset;
+			float* output_sample = output_values + current_offset;
+			float mean_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) mean_value += input_sample[feature_index];
+			mean_value /= feature_count;
+			float variance_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float difference = input_sample[feature_index] - mean_value;
+				variance_value += difference * difference;
+			}
+			variance_value /= feature_count;
+			float inverse_standard_deviation = 1.0f / std::sqrt(variance_value + 1e-5f);
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				output_sample[feature_index] = (input_sample[feature_index] - mean_value) * inverse_standard_deviation;
+			}
+			current_offset += feature_count;
 		}
 	}
 };
 HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* raw_input = original_inputs + offset;
-			float* upstream = upstream_gradient + offset;
-			float* out_grad = output_gradient + offset;
-			float mean = 0.0f;
-			for (int i = 0; i < feature_count; ++i) mean += raw_input[i];
-			mean /= feature_count;
-			float var = 0.0f;
-			for (int i = 0; i < feature_count; ++i) { float diff = raw_input[i] - mean; var += diff * diff; }
-			var /= feature_count;
-			float inverse_std = 1.0f / std::sqrt(var + 1e-5f);
-			float mean_up = 0.0f;
-			for (int i = 0; i < feature_count; ++i) mean_up += upstream[i];
-			mean_up /= feature_count;
-			float sum_up_xhat = 0.0f;
-			for (int i = 0; i < feature_count; ++i) { float xhat = (raw_input[i] - mean) * inverse_std; sum_up_xhat += upstream[i] * xhat; }
-			sum_up_xhat /= feature_count;
-			for (int i = 0; i < feature_count; ++i) {
-				float xhat = (raw_input[i] - mean) * inverse_std;
-				out_grad[i] = (upstream[i] - mean_up - xhat * sum_up_xhat) * inverse_std;
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* raw_input_sample = original_inputs + current_offset;
+			float* upstream_sample = upstream_gradient + current_offset;
+			float* output_gradient_sample = output_gradient + current_offset;
+			float mean_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) mean_value += raw_input_sample[feature_index];
+			mean_value /= feature_count;
+			float variance_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float difference = raw_input_sample[feature_index] - mean_value;
+				variance_value += difference * difference;
 			}
-			offset += feature_count;
+			variance_value /= feature_count;
+			float inverse_standard_deviation = 1.0f / std::sqrt(variance_value + 1e-5f);
+			float mean_upstream_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) mean_upstream_value += upstream_sample[feature_index];
+			mean_upstream_value /= feature_count;
+			float sum_upstream_normalized = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float normalized_input = (raw_input_sample[feature_index] - mean_value) * inverse_standard_deviation;
+				sum_upstream_normalized += upstream_sample[feature_index] * normalized_input;
+			}
+			sum_upstream_normalized /= feature_count;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float normalized_input = (raw_input_sample[feature_index] - mean_value) * inverse_standard_deviation;
+				output_gradient_sample[feature_index] = (upstream_sample[feature_index] - mean_upstream_value - normalized_input * sum_upstream_normalized) * inverse_standard_deviation;
+			}
+			current_offset += feature_count;
 		}
 	}
 };
 HookFunc LearnableLayerNormImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	float* extra_w = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
-	float* gamma = extra_w;
-	float* beta = gamma + feature_count;
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* input_sample = preactivation_values + offset;
-			float* output_sample = output_values + offset;
-			float mean = 0.0f;
-			for (int i = 0; i < feature_count; ++i) mean += input_sample[i];
-			mean /= feature_count;
-			float variance = 0.0f;
-			for (int i = 0; i < feature_count; ++i) variance += (input_sample[i] - mean) * (input_sample[i] - mean);
-			variance /= feature_count;
-			float inverse_std_dev = 1.0f / std::sqrt(variance + 1e-5f);
-			for (int i = 0; i < feature_count; ++i) output_sample[i] = (input_sample[i] - mean) * inverse_std_dev * gamma[i] + beta[i];
-			offset += feature_count;
+	float* extra_weights = std::visit([](auto* current_layer) { return current_layer->extra_weights_begin; }, layer);
+	float* gamma_parameters = extra_weights;
+	float* beta_parameters = gamma_parameters + feature_count;
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* input_sample = preactivation_values + current_offset;
+			float* output_sample = output_values + current_offset;
+			float mean_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) mean_value += input_sample[feature_index];
+			mean_value /= feature_count;
+			float variance_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float difference = input_sample[feature_index] - mean_value;
+				variance_value += difference * difference;
+			}
+			variance_value /= feature_count;
+			float inverse_standard_deviation = 1.0f / std::sqrt(variance_value + 1e-5f);
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				output_sample[feature_index] = (input_sample[feature_index] - mean_value) * inverse_standard_deviation * gamma_parameters[feature_index] + beta_parameters[feature_index];
+			}
+			current_offset += feature_count;
 		}
 	}
 };
 HookDerivative LearnableLayerNormDerivativeImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	float* extra_w = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
-	float* extra_g = std::visit([](auto* l) { return l->extra_weight_gradients; }, layer);
-	float* gamma = extra_w;
-	float* beta = gamma + feature_count;
-	float* gamma_gradient = extra_g;
-	float* beta_gradient = extra_g + feature_count;
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* raw_input = original_inputs + offset;
-			float* upstream = upstream_gradient + offset;
-			float* out_grad = output_gradient + offset;
-			float mean = 0.0f;
-			for (int i = 0; i < feature_count; ++i) mean += raw_input[i];
-			mean /= feature_count;
-			float var = 0.0f;
-			for (int i = 0; i < feature_count; ++i) { float diff = raw_input[i] - mean; var += diff * diff; }
-			var /= feature_count;
-			float inverse_std = 1.0f / std::sqrt(var + 1e-5f);
-			float sum_gamma_up = 0.0f;
-			float sum_gamma_up_xhat = 0.0f;
-			for (int i = 0; i < feature_count; ++i) {
-				float x_hat = (raw_input[i] - mean) * inverse_std;
-				float g_up = gamma[i] * upstream[i];
-				sum_gamma_up += g_up;
-				sum_gamma_up_xhat += g_up * x_hat;
+	float* extra_weights = std::visit([](auto* current_layer) { return current_layer->extra_weights_begin; }, layer);
+	float* extra_gradients = std::visit([](auto* current_layer) { return current_layer->extra_weight_gradients; }, layer);
+	float* gamma_parameters = extra_weights;
+	float* beta_parameters = gamma_parameters + feature_count;
+	float* gamma_gradients = extra_gradients;
+	float* beta_gradients = extra_gradients + feature_count;
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* raw_input_sample = original_inputs + current_offset;
+			float* upstream_sample = upstream_gradient + current_offset;
+			float* output_gradient_sample = output_gradient + current_offset;
+			float mean_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) mean_value += raw_input_sample[feature_index];
+			mean_value /= feature_count;
+			float variance_value = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float difference = raw_input_sample[feature_index] - mean_value;
+				variance_value += difference * difference;
 			}
-			float inv_N = 1.0f / feature_count;
-			for (int i = 0; i < feature_count; ++i) {
-				float x_hat = (raw_input[i] - mean) * inverse_std;
-				float dx = (gamma[i] * upstream[i] - sum_gamma_up * inv_N - x_hat * sum_gamma_up_xhat * inv_N) * inverse_std;
-				out_grad[i] = dx;
-				gamma_gradient[i] += upstream[i] * x_hat;
-				beta_gradient[i] += upstream[i];
+			variance_value /= feature_count;
+			float inverse_standard_deviation = 1.0f / std::sqrt(variance_value + 1e-5f);
+			float sum_gamma_upstream = 0.0f;
+			float sum_gamma_upstream_normalized = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float normalized_input = (raw_input_sample[feature_index] - mean_value) * inverse_standard_deviation;
+				float gamma_upstream_product = gamma_parameters[feature_index] * upstream_sample[feature_index];
+				sum_gamma_upstream += gamma_upstream_product;
+				sum_gamma_upstream_normalized += gamma_upstream_product * normalized_input;
 			}
-			offset += feature_count;
+			float inverse_feature_count = 1.0f / feature_count;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float normalized_input = (raw_input_sample[feature_index] - mean_value) * inverse_standard_deviation;
+				float input_gradients = (gamma_parameters[feature_index] * upstream_sample[feature_index] - sum_gamma_upstream * inverse_feature_count - normalized_input * sum_gamma_upstream_normalized * inverse_feature_count) * inverse_standard_deviation;
+				output_gradient_sample[feature_index] = input_gradients;
+				gamma_gradients[feature_index] += upstream_sample[feature_index] * normalized_input;
+				beta_gradients[feature_index] += upstream_sample[feature_index];
+			}
+			current_offset += feature_count;
 		}
 	}
 };
 HookFunc RMSNormImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	float* gamma = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* input_sample = preactivation_values + offset;
-			float* output_sample = output_values + offset;
+	float* gamma_parameters = std::visit([](auto* current_layer) { return current_layer->extra_weights_begin; }, layer);
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* input_sample = preactivation_values + current_offset;
+			float* output_sample = output_values + current_offset;
 			float rms = 0.0f;
-			for (int i = 0; i < feature_count; ++i) rms += input_sample[i] * input_sample[i];
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) rms += input_sample[feature_index] * input_sample[feature_index];
 			rms = std::sqrt(rms / feature_count + 1e-5f);
 			float inverse_rms = 1.0f / rms;
-			for (int i = 0; i < feature_count; ++i) output_sample[i] = input_sample[i] * inverse_rms * gamma[i];
-			offset += feature_count;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) output_sample[feature_index] = input_sample[feature_index] * inverse_rms * gamma_parameters[feature_index];
+			current_offset += feature_count;
 		}
 	}
 };
 HookDerivative RMSNormDerivativeImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	float* gamma = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
-	float* gamma_gradient = std::visit([](auto* l) { return l->extra_weight_gradients; }, layer);
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* raw_input = original_inputs + offset;
-			float* upstream = upstream_gradient + offset;
-			float* out_grad = output_gradient + offset;
-			float sum_sq = 0.0f;
-			for (int i = 0; i < feature_count; ++i) sum_sq += raw_input[i] * raw_input[i];
-			float rms = std::sqrt(sum_sq / feature_count + 1e-5f);
+	float* gamma_parameters = std::visit([](auto* current_layer) { return current_layer->extra_weights_begin; }, layer);
+	float* gamma_gradients = std::visit([](auto* current_layer) { return current_layer->extra_weight_gradients; }, layer);
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* raw_input_sample = original_inputs + current_offset;
+			float* upstream_sample = upstream_gradient + current_offset;
+			float* output_gradient_sample = output_gradient + current_offset;
+			float sum_squares = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) sum_squares += raw_input_sample[feature_index] * raw_input_sample[feature_index];
+			float rms = std::sqrt(sum_squares / feature_count + 1e-5f);
 			float inverse_rms = 1.0f / rms;
 			float inverse_rms_cubed = inverse_rms * inverse_rms * inverse_rms;
-			float sum_gamma_up_x = 0.0f;
-			for (int i = 0; i < feature_count; ++i) sum_gamma_up_x += gamma[i] * upstream[i] * raw_input[i];
-			float inv_N = 1.0f / feature_count;
-			for (int i = 0; i < feature_count; ++i) {
-				float dx = gamma[i] * upstream[i] * inverse_rms - raw_input[i] * sum_gamma_up_x * inverse_rms_cubed * inv_N;
-				out_grad[i] = dx;
-				gamma_gradient[i] += upstream[i] * raw_input[i] * inverse_rms;
+			float sum_gamma_upstream_x = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) sum_gamma_upstream_x += gamma_parameters[feature_index] * upstream_sample[feature_index] * raw_input_sample[feature_index];
+			float inverse_feature_count = 1.0f / feature_count;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+				float input_gradients = gamma_parameters[feature_index] * upstream_sample[feature_index] * inverse_rms - raw_input_sample[feature_index] * sum_gamma_upstream_x * inverse_rms_cubed * inverse_feature_count;
+				output_gradient_sample[feature_index] = input_gradients;
+				gamma_gradients[feature_index] += upstream_sample[feature_index] * raw_input_sample[feature_index] * inverse_rms;
 			}
-			offset += feature_count;
+			current_offset += feature_count;
 		}
 	}
 };
 HookFunc TemperatureHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	const std::vector<int>& extra_args = std::visit([](auto* l) -> const std::vector<int>& { return l->extra_args; }, layer);
-	float temperature = extra_args.size() > 0 ? static_cast<float>(extra_args[0]) / 1000.0f : 0.0f;
-	if (temperature <= 0.0f) {
-		int total = 0;
-		for (int s : sequence_lengths) total += s * feature_count;
-		for (int i = 0; i < total; ++i) output_values[i] = preactivation_values[i];
+	const std::vector<int>& extra_arguments = std::visit([](auto* current_layer) -> const std::vector<int>& { return current_layer->extra_args; }, layer);
+	float temperature_value = extra_arguments.size() > 0 ? static_cast<float>(extra_arguments[0]) / 1000.0f : 0.0f;
+	if (temperature_value <= 0.0f) {
+		int total_feature_elements = 0;
+		for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+		for (int element_index = 0; element_index < total_feature_elements; ++element_index) output_values[element_index] = preactivation_values[element_index];
 		return;
 	}
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	float inv_temp = 1.0f / temperature;
-	for (int i = 0; i < total; ++i) output_values[i] = preactivation_values[i] * inv_temp;
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	float inverse_temperature = 1.0f / temperature_value;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) output_values[element_index] = preactivation_values[element_index] * inverse_temperature;
 };
 HookDerivative TemperatureGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	const std::vector<int>& extra_args = std::visit([](auto* l) -> const std::vector<int>& { return l->extra_args; }, layer);
-	float temperature = extra_args.size() > 0 ? static_cast<float>(extra_args[0]) / 1000.0f : 0.0f;
-	if (temperature <= 0.0f) {
-		int total = 0;
-		for (int s : sequence_lengths) total += s * feature_count;
-		for (int i = 0; i < total; ++i) output_gradient[i] = upstream_gradient[i];
+	const std::vector<int>& extra_arguments = std::visit([](auto* current_layer) -> const std::vector<int>& { return current_layer->extra_args; }, layer);
+	float temperature_value = extra_arguments.size() > 0 ? static_cast<float>(extra_arguments[0]) / 1000.0f : 0.0f;
+	if (temperature_value <= 0.0f) {
+		int total_feature_elements = 0;
+		for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+		for (int element_index = 0; element_index < total_feature_elements; ++element_index) output_gradient[element_index] = upstream_gradient[element_index];
 		return;
 	}
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	float inv_temp = 1.0f / temperature;
-	for (int i = 0; i < total; ++i) output_gradient[i] = upstream_gradient[i] * inv_temp;
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	float inverse_temperature = 1.0f / temperature_value;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) output_gradient[element_index] = upstream_gradient[element_index] * inverse_temperature;
 };
 HookFunc ReLuHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		output_values[i] = preactivation_values[i] > 0.0f ? preactivation_values[i] : 0.0f;
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		output_values[element_index] = preactivation_values[element_index] > 0.0f ? preactivation_values[element_index] : 0.0f;
 	}
 };
 HookDerivative ReLuGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		output_gradient[i] = upstream_gradient[i] * (preactivation_values[i] > 0.0f ? 1.0f : 0.0f);
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		output_gradient[element_index] = upstream_gradient[element_index] * (preactivation_values[element_index] > 0.0f ? 1.0f : 0.0f);
 	}
 };
 HookFunc SigmoidHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		output_values[i] = 1.0f / (1.0f + std::exp(-preactivation_values[i]));
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		output_values[element_index] = 1.0f / (1.0f + std::exp(-preactivation_values[element_index]));
 	}
 };
 HookDerivative SigmoidGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		float sig = 1.0f / (1.0f + std::exp(-preactivation_values[i]));
-		output_gradient[i] = upstream_gradient[i] * sig * (1.0f - sig);
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		float sigmoid_activation = 1.0f / (1.0f + std::exp(-preactivation_values[element_index]));
+		output_gradient[element_index] = upstream_gradient[element_index] * sigmoid_activation * (1.0f - sigmoid_activation);
 	}
 };
 HookFunc TanhHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		output_values[i] = std::tanh(preactivation_values[i]);
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		output_values[element_index] = std::tanh(preactivation_values[element_index]);
 	}
 };
 HookDerivative TanhGradHook = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int total = 0;
-	for (int s : sequence_lengths) total += s * feature_count;
-	for (int i = 0; i < total; ++i) {
-		float t = std::tanh(preactivation_values[i]);
-		output_gradient[i] = upstream_gradient[i] * (1.0f - t * t);
+	int total_feature_elements = 0;
+	for (int length : sequence_lengths) total_feature_elements += length * feature_count;
+	for (int element_index = 0; element_index < total_feature_elements; ++element_index) {
+		float tanh_activation = std::tanh(preactivation_values[element_index]);
+		output_gradient[element_index] = upstream_gradient[element_index] * (1.0f - tanh_activation * tanh_activation);
 	}
 };
 HookFunc Softmax = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	int offset = 0;
-	for (int b = 0; b < batch_count; ++b) {
-		int rows = sequence_lengths[b];
-		for (int r = 0; r < rows; ++r) {
-			float* input_sample = preactivation_values + offset;
-			float* output_sample = output_values + offset;
-			float maximum = input_sample[0];
-			for (int i = 1; i < feature_count; ++i) if (input_sample[i] > maximum) maximum = input_sample[i];
-			float sum = 0.0f;
-			for (int i = 0; i < feature_count; ++i) sum += std::exp(input_sample[i] - maximum);
-			for (int i = 0; i < feature_count; ++i) output_sample[i] = std::exp(input_sample[i] - maximum) / sum;
-			offset += feature_count;
+	int current_offset = 0;
+	for (int batch_index = 0; batch_index < batch_count; ++batch_index) {
+		int sequence_rows = sequence_lengths[batch_index];
+		for (int row_index = 0; row_index < sequence_rows; ++row_index) {
+			float* input_sample = preactivation_values + current_offset;
+			float* output_sample = output_values + current_offset;
+			float maximum_value = input_sample[0];
+			for (int feature_index = 1; feature_index < feature_count; ++feature_index) {
+				if (input_sample[feature_index] > maximum_value) maximum_value = input_sample[feature_index];
+			}
+			float exponential_sum = 0.0f;
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) exponential_sum += std::exp(input_sample[feature_index] - maximum_value);
+			for (int feature_index = 0; feature_index < feature_count; ++feature_index) output_sample[feature_index] = std::exp(input_sample[feature_index] - maximum_value) / exponential_sum;
+			current_offset += feature_count;
 		}
 	}
 };
 HookDerivative SoftmaxDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int total_rows = 0;
-	for (int s : sequence_lengths) total_rows += s;
-	std::vector<float> softmax_values(total_rows * feature_count);
-	for (int i = 0; i < total_rows; ++i) {
-		float* inp = preactivation_values + i * feature_count;
-		float* out = softmax_values.data() + i * feature_count;
-		float maximum = inp[0];
-		for (int j = 1; j < feature_count; ++j) if (inp[j] > maximum) maximum = inp[j];
-		float sum = 0.0f;
-		for (int j = 0; j < feature_count; ++j) sum += std::exp(inp[j] - maximum);
-		for (int j = 0; j < feature_count; ++j) out[j] = std::exp(inp[j] - maximum) / sum;
+	int total_rows_count = 0;
+	for (int length : sequence_lengths) total_rows_count += length;
+	std::vector<float> softmax_values_buffer(total_rows_count * feature_count);
+	for (int row_index = 0; row_index < total_rows_count; ++row_index) {
+		float* input_sample = preactivation_values + row_index * feature_count;
+		float* output_sample = softmax_values_buffer.data() + row_index * feature_count;
+		float maximum_value = input_sample[0];
+		for (int feature_index = 1; feature_index < feature_count; ++feature_index) {
+			if (input_sample[feature_index] > maximum_value) maximum_value = input_sample[feature_index];
+		}
+		float exponential_sum = 0.0f;
+		for (int feature_index = 0; feature_index < feature_count; ++feature_index) exponential_sum += std::exp(input_sample[feature_index] - maximum_value);
+		for (int feature_index = 0; feature_index < feature_count; ++feature_index) output_sample[feature_index] = std::exp(input_sample[feature_index] - maximum_value) / exponential_sum;
 	}
-	for (int i = 0; i < total_rows; ++i) {
-		int correct_token = correct_indices[i];
-		float* soft = softmax_values.data() + i * feature_count;
-		float* out = output_gradient + i * feature_count;
-		float* up = upstream_gradient + i * feature_count;
-		float grad_at_correct = up[correct_token];
-		for (int j = 0; j < feature_count; ++j) out[j] = up[j] * soft[j] - soft[j] * soft[correct_token] * grad_at_correct;
+	for (int row_index = 0; row_index < total_rows_count; ++row_index) {
+		int correct_token = correct_indices[row_index];
+		float* softmax_sample = softmax_values_buffer.data() + row_index * feature_count;
+		float* output_gradient_sample = output_gradient + row_index * feature_count;
+		float* upstream_sample = upstream_gradient + row_index * feature_count;
+		float gradient_at_correct = upstream_sample[correct_token];
+		for (int feature_index = 0; feature_index < feature_count; ++feature_index) {
+			output_gradient_sample[feature_index] = upstream_sample[feature_index] * softmax_sample[feature_index] - softmax_sample[feature_index] * softmax_sample[correct_token] * gradient_at_correct;
+		}
 	}
 };
 HookDerivative SoftmaxForCrossEntropyLossDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	int total_rows = 0;
-	for (int s : sequence_lengths) total_rows += s;
-	for (int i = 0; i < total_rows; ++i) {
-		int correct_token = correct_indices[i];
-		float* logit_sample = preactivation_values + i * feature_count;
-		float* out_sample = output_gradient + i * feature_count;
-		float maximum = logit_sample[0];
-		for (int j = 1; j < feature_count; ++j) if (logit_sample[j] > maximum) maximum = logit_sample[j];
-		float sum_exp = 0.0f;
-		for (int j = 0; j < feature_count; ++j) sum_exp += std::exp(logit_sample[j] - maximum);
-		for (int j = 0; j < feature_count; ++j) out_sample[j] = std::exp(logit_sample[j] - maximum) / sum_exp;
-		out_sample[correct_token] -= 1.0f;
+	int total_rows_count = 0;
+	for (int length : sequence_lengths) total_rows_count += length;
+	for (int row_index = 0; row_index < total_rows_count; ++row_index) {
+		int correct_token = correct_indices[row_index];
+		float* logit_sample = preactivation_values + row_index * feature_count;
+		float* output_gradient_sample = output_gradient + row_index * feature_count;
+		float maximum_value = logit_sample[0];
+		for (int feature_index = 1; feature_index < feature_count; ++feature_index) {
+			if (logit_sample[feature_index] > maximum_value) maximum_value = logit_sample[feature_index];
+		}
+		float exponential_sum = 0.0f;
+		for (int feature_index = 0; feature_index < feature_count; ++feature_index) exponential_sum += std::exp(logit_sample[feature_index] - maximum_value);
+		for (int feature_index = 0; feature_index < feature_count; ++feature_index) output_gradient_sample[feature_index] = std::exp(logit_sample[feature_index] - maximum_value) / exponential_sum;
+		output_gradient_sample[correct_token] -= 1.0f;
 	}
 };
 HookFunc EmbeddingForward = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = parametric_layer->output;
-	int total_rows = 0;
-	for (int s : sequence_lengths) total_rows += s;
-	for (int i = 0; i < total_rows; ++i) {
-		int token_index = static_cast<int>(original_inputs[i]);
+	int total_rows_count = 0;
+	for (int length : sequence_lengths) total_rows_count += length;
+	for (int row_index = 0; row_index < total_rows_count; ++row_index) {
+		int token_index = static_cast<int>(original_inputs[row_index]);
 		float* weight_row = parametric_layer->weights_begin + token_index * embedding_dimension;
-		float* output_row = output_values + i * embedding_dimension;
-		for (int j = 0; j < embedding_dimension; ++j) output_row[j] = weight_row[j];
+		float* output_row = output_values + row_index * embedding_dimension;
+		for (int dimension_index = 0; dimension_index < embedding_dimension; ++dimension_index) output_row[dimension_index] = weight_row[dimension_index];
 	}
 };
 HookDerivative EmbeddingDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = parametric_layer->output;
-	float* weight_gradients_ptr = parametric_layer->weight_gradients;
-	int total_rows = 0;
-	for (int s : sequence_lengths) total_rows += s;
-	for (int i = 0; i < total_rows; ++i) {
-		int token_index = static_cast<int>(original_inputs[i]);
-		float* gradient_row = weight_gradients_ptr + token_index * embedding_dimension;
-		float* upstream_row = upstream_gradient + i * embedding_dimension;
-		for (int j = 0; j < embedding_dimension; ++j) gradient_row[j] += upstream_row[j];
+	float* weight_gradients_pointer = parametric_layer->weight_gradients;
+	int total_rows_count = 0;
+	for (int length : sequence_lengths) total_rows_count += length;
+	for (int row_index = 0; row_index < total_rows_count; ++row_index) {
+		int token_index = static_cast<int>(original_inputs[row_index]);
+		float* gradient_row = weight_gradients_pointer + token_index * embedding_dimension;
+		float* upstream_row = upstream_gradient + row_index * embedding_dimension;
+		for (int dimension_index = 0; dimension_index < embedding_dimension; ++dimension_index) gradient_row[dimension_index] += upstream_row[dimension_index];
 	}
-	for (int i = 0; i < total_rows * parametric_layer->input; ++i) output_gradient[i] = 0.0f;
+	for (int element_index = 0; element_index < total_rows_count * parametric_layer->input; ++element_index) output_gradient[element_index] = 0.0f;
 };
 HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = feature_count;
-	int max_seq_len = parametric_layer->extra_args[0];
+	int maximum_sequence_length = parametric_layer->extra_args[0];
 	float* weight_matrix = parametric_layer->weights_begin;
 	float* query_weights = weight_matrix;
 	float* key_weights = weight_matrix + embedding_dimension * embedding_dimension;
 	float* value_weights = weight_matrix + 2 * embedding_dimension * embedding_dimension;
-	float* query = parametric_layer->scratch_pointer;
-	float* key = query + max_seq_len * embedding_dimension;
-	float* value = key + max_seq_len * embedding_dimension;
-	float* attention_scores = value + max_seq_len * embedding_dimension;
-	float* stored_lengths = attention_scores + max_seq_len * max_seq_len;
+	float* query_buffer = parametric_layer->scratch_pointer;
+	float* key_buffer = query_buffer + maximum_sequence_length * embedding_dimension;
+	float* value_buffer = key_buffer + maximum_sequence_length * embedding_dimension;
+	float* attention_scores = value_buffer + maximum_sequence_length * embedding_dimension;
+	float* stored_lengths = attention_scores + maximum_sequence_length * maximum_sequence_length;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
-	int offset = 0;
-	for (int seq = 0; seq < batch_count; ++seq) {
-		int actual_len = sequence_lengths[seq];
-		stored_lengths[seq] = static_cast<float>(actual_len);
-		float* seq_input = preactivation_values + offset;
-		float* seq_output = output_values + offset;
-		matmult(seq_input, query_weights, query, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(seq_input, key_weights, key, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(seq_input, value_weights, value, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(query, key, attention_scores, max_seq_len, embedding_dimension, max_seq_len, false, true, inverse_sqrt_dimension, 0.0f);
-		for (int row = 0; row < max_seq_len; ++row) {
-			for (int col = row + 1; col < max_seq_len; ++col) {
-				attention_scores[row * max_seq_len + col] = -1e30f;
+	int current_offset = 0;
+	for (int sequence_index = 0; sequence_index < batch_count; ++sequence_index) {
+		int actual_length = sequence_lengths[sequence_index];
+		stored_lengths[sequence_index] = static_cast<float>(actual_length);
+		float* sequence_input = preactivation_values + current_offset;
+		float* sequence_output = output_values + current_offset;
+		matmult(sequence_input, query_weights, query_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, key_weights, key_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, value_weights, value_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(query_buffer, key_buffer, attention_scores, maximum_sequence_length, embedding_dimension, maximum_sequence_length, false, true, inverse_sqrt_dimension, 0.0f);
+		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
+			for (int col_index = row_index + 1; col_index < maximum_sequence_length; ++col_index) {
+				attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
 			}
 		}
-		if (actual_len < max_seq_len) {
-			for (int row = 0; row < max_seq_len; ++row) {
-				for (int col = actual_len; col < max_seq_len; ++col) {
-					attention_scores[row * max_seq_len + col] = -1e30f;
+		if (actual_length < maximum_sequence_length) {
+			for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
+				for (int col_index = actual_length; col_index < maximum_sequence_length; ++col_index) {
+					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
 				}
 			}
-			for (int row = actual_len; row < max_seq_len; ++row) {
-				for (int col = 0; col < max_seq_len; ++col) {
-					attention_scores[row * max_seq_len + col] = -1e30f;
+			for (int row_index = actual_length; row_index < maximum_sequence_length; ++row_index) {
+				for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) {
+					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
 				}
 			}
 		}
-		for (int row = 0; row < max_seq_len; ++row) {
-			float row_max = attention_scores[row * max_seq_len];
-			for (int col = 1; col < max_seq_len; ++col) {
-				if (attention_scores[row * max_seq_len + col] > row_max) row_max = attention_scores[row * max_seq_len + col];
+		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
+			float row_maximum = attention_scores[row_index * maximum_sequence_length];
+			for (int col_index = 1; col_index < maximum_sequence_length; ++col_index) {
+				if (attention_scores[row_index * maximum_sequence_length + col_index] > row_maximum) row_maximum = attention_scores[row_index * maximum_sequence_length + col_index];
 			}
-			float row_sum = 0.0f;
-			for (int col = 0; col < max_seq_len; ++col) {
-				row_sum += std::exp(attention_scores[row * max_seq_len + col] - row_max);
+			float row_exponential_sum = 0.0f;
+			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) {
+				row_exponential_sum += std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum);
 			}
-			for (int col = 0; col < max_seq_len; ++col) {
-				attention_scores[row * max_seq_len + col] = std::exp(attention_scores[row * max_seq_len + col] - row_max) / row_sum;
+			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) {
+				attention_scores[row_index * maximum_sequence_length + col_index] = std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum) / row_exponential_sum;
 			}
 		}
-		matmult(attention_scores, value, seq_output, max_seq_len, max_seq_len, embedding_dimension, false, false, 1.0f, 0.0f);
-		offset += max_seq_len * embedding_dimension;
-		sequence_lengths[seq] = actual_len;
+		matmult(attention_scores, value_buffer, sequence_output, maximum_sequence_length, maximum_sequence_length, embedding_dimension, false, false, 1.0f, 0.0f);
+		current_offset += maximum_sequence_length * embedding_dimension;
+		sequence_lengths[sequence_index] = actual_length;
 	}
 };
 HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = feature_count;
-	int max_seq_len = parametric_layer->extra_args[0];
+	int maximum_sequence_length = parametric_layer->extra_args[0];
 	float* input_embeddings = original_inputs;
 	float* weight_matrix = parametric_layer->weights_begin;
 	float* query_weights = weight_matrix;
 	float* key_weights = weight_matrix + embedding_dimension * embedding_dimension;
 	float* value_weights = weight_matrix + 2 * embedding_dimension * embedding_dimension;
-	float* scratch = parametric_layer->scratch_pointer;
-	float* query = scratch; //max seq len * em
-	float* key = query + max_seq_len * embedding_dimension; // max seq len * em
-	float* temporary_buffer = key + max_seq_len * embedding_dimension; // max seq len * em, can be used for value gradients or attention score gradients
-	float* attention_scores = temporary_buffer + max_seq_len * embedding_dimension; // max seq len * max seq len
-	float* score_gradients = attention_scores + max_seq_len * max_seq_len; // max seq len * max seq len, can be used for upstream reduced to seq len * em or for storing gradients of attention scores
-	float* stored_lengths = score_gradients + max_seq_len * max_seq_len; //batch count
-	float* full_upstream = stored_lengths + batch_count; // max seq len * em
+	float* scratchpad_pointer = parametric_layer->scratch_pointer;
+	float* query_buffer = scratchpad_pointer;
+	float* key_buffer = query_buffer + maximum_sequence_length * embedding_dimension;
+	float* temporary_buffer = key_buffer + maximum_sequence_length * embedding_dimension;
+	float* attention_scores = temporary_buffer + maximum_sequence_length * embedding_dimension;
+	float* score_gradients = attention_scores + maximum_sequence_length * maximum_sequence_length;
+	float* stored_lengths = score_gradients + maximum_sequence_length * maximum_sequence_length;
+	float* full_upstream_sample = stored_lengths + batch_count;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
-	int offset = 0;
+	int current_offset = 0;
 	int upstream_offset = 0;
-	for (int seq = 0; seq < batch_count; ++seq) {
-		int original_len = static_cast<int>(stored_lengths[seq]);
-		int actual_len = sequence_lengths[seq];
-		float* seq_input = input_embeddings + offset;
-		float* seq_upstream_reduced = upstream_gradient + upstream_offset;
-		float* seq_output_grad = output_gradient + offset;
-		std::fill(full_upstream, full_upstream + max_seq_len * embedding_dimension, 0.0f);
-		for (int row = 0; row < actual_len; ++row) {
-			for (int col = 0; col < embedding_dimension; ++col) {
-				full_upstream[row * embedding_dimension + col] = seq_upstream_reduced[row * embedding_dimension + col];
+	for (int sequence_index = 0; sequence_index < batch_count; ++sequence_index) {
+		int original_length = static_cast<int>(stored_lengths[sequence_index]);
+		int actual_length = sequence_lengths[sequence_index];
+		float* sequence_input = input_embeddings + current_offset;
+		float* sequence_upstream_reduced = upstream_gradient + upstream_offset;
+		float* sequence_output_gradient = output_gradient + current_offset;
+		std::fill(full_upstream_sample, full_upstream_sample + maximum_sequence_length * embedding_dimension, 0.0f);
+		for (int row_index = 0; row_index < actual_length; ++row_index) {
+			for (int col_index = 0; col_index < embedding_dimension; ++col_index) {
+				full_upstream_sample[row_index * embedding_dimension + col_index] = sequence_upstream_reduced[row_index * embedding_dimension + col_index];
 			}
 		}
-		matmult(seq_input, query_weights, query, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(seq_input, key_weights, key, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(seq_input, value_weights, temporary_buffer, max_seq_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(query, key, attention_scores, max_seq_len, embedding_dimension, max_seq_len, false, true, inverse_sqrt_dimension, 0.0f);
-		for (int row = 0; row < max_seq_len; ++row) {
-			for (int col = row + 1; col < max_seq_len; ++col) {
-				attention_scores[row * max_seq_len + col] = -1e30f;
+		matmult(sequence_input, query_weights, query_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, key_weights, key_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, value_weights, temporary_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(query_buffer, key_buffer, attention_scores, maximum_sequence_length, embedding_dimension, maximum_sequence_length, false, true, inverse_sqrt_dimension, 0.0f);
+		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
+			for (int col_index = row_index + 1; col_index < maximum_sequence_length; ++col_index) {
+				attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
 			}
 		}
-		if (actual_len < max_seq_len) {
-			for (int row = 0; row < max_seq_len; ++row) {
-				for (int col = actual_len; col < max_seq_len; ++col) {
-					attention_scores[row * max_seq_len + col] = -1e30f;
+		if (actual_length < maximum_sequence_length) {
+			for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
+				for (int col_index = actual_length; col_index < maximum_sequence_length; ++col_index) {
+					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
 				}
 			}
-			for (int row = actual_len; row < max_seq_len; ++row) {
-				for (int col = 0; col < max_seq_len; ++col) {
-					attention_scores[row * max_seq_len + col] = -1e30f;
+			for (int row_index = actual_length; row_index < maximum_sequence_length; ++row_index) {
+				for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) {
+					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
 				}
 			}
 		}
-		for (int row = 0; row < max_seq_len; ++row) {
-			float row_max = attention_scores[row * max_seq_len];
-			for (int col = 1; col < max_seq_len; ++col) {
-				if (attention_scores[row * max_seq_len + col] > row_max) row_max = attention_scores[row * max_seq_len + col];
+		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
+			float row_maximum = attention_scores[row_index * maximum_sequence_length];
+			for (int col_index = 1; col_index < maximum_sequence_length; ++col_index) {
+				if (attention_scores[row_index * maximum_sequence_length + col_index] > row_maximum) row_maximum = attention_scores[row_index * maximum_sequence_length + col_index];
 			}
-			float row_sum = 0.0f;
-			for (int col = 0; col < max_seq_len; ++col) {
-				row_sum += std::exp(attention_scores[row * max_seq_len + col] - row_max);
+			float row_exponential_sum = 0.0f;
+			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) {
+				row_exponential_sum += std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum);
 			}
-			for (int col = 0; col < max_seq_len; ++col) {
-				attention_scores[row * max_seq_len + col] = std::exp(attention_scores[row * max_seq_len + col] - row_max) / row_sum;
+			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) {
+				attention_scores[row_index * maximum_sequence_length + col_index] = std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum) / row_exponential_sum;
 			}
 		}
-		matmult(full_upstream, temporary_buffer, score_gradients, max_seq_len, embedding_dimension, max_seq_len, false, true, 1.0f, 0.0f);
-		for (int row = 0; row < max_seq_len; ++row) {
+		matmult(full_upstream_sample, temporary_buffer, score_gradients, maximum_sequence_length, embedding_dimension, maximum_sequence_length, false, true, 1.0f, 0.0f);
+		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index) {
 			float weighted_sum = 0.0f;
-			for (int col = 0; col < max_seq_len; ++col) weighted_sum += score_gradients[row * max_seq_len + col] * attention_scores[row * max_seq_len + col];
-			for (int col = 0; col < max_seq_len; ++col) score_gradients[row * max_seq_len + col] = attention_scores[row * max_seq_len + col] * (score_gradients[row * max_seq_len + col] - weighted_sum);
+			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) weighted_sum += score_gradients[row_index * maximum_sequence_length + col_index] * attention_scores[row_index * maximum_sequence_length + col_index];
+			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index) score_gradients[row_index * maximum_sequence_length + col_index] = attention_scores[row_index * maximum_sequence_length + col_index] * (score_gradients[row_index * maximum_sequence_length + col_index] - weighted_sum);
 		}
 		float* value_gradient = temporary_buffer;
-		matmult(attention_scores, full_upstream, value_gradient, max_seq_len, max_seq_len, embedding_dimension, true, false, 1.0f, 0.0f);
-		float* gradients = parametric_layer->weight_gradients;
-		matmult(seq_input, value_gradient, gradients + 2 * embedding_dimension * embedding_dimension, embedding_dimension, max_seq_len, embedding_dimension, true, false, 1.0f, 1.0f);
+		matmult(attention_scores, full_upstream_sample, value_gradient, maximum_sequence_length, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 0.0f);
+		float* weight_gradients_pointer = parametric_layer->weight_gradients;
+		matmult(sequence_input, value_gradient, weight_gradients_pointer + 2 * embedding_dimension * embedding_dimension, embedding_dimension, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 1.0f);
 		float* query_gradient = temporary_buffer;
-		matmult(score_gradients, key, query_gradient, max_seq_len, max_seq_len, embedding_dimension, false, false, inverse_sqrt_dimension, 0.0f);
-		matmult(seq_input, query_gradient, gradients, embedding_dimension, max_seq_len, embedding_dimension, true, false, 1.0f, 1.0f);
+		matmult(score_gradients, key_buffer, query_gradient, maximum_sequence_length, maximum_sequence_length, embedding_dimension, false, false, inverse_sqrt_dimension, 0.0f);
+		matmult(sequence_input, query_gradient, weight_gradients_pointer, embedding_dimension, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 1.0f);
 		float* key_gradient = temporary_buffer;
-		matmult(score_gradients, query, key_gradient, max_seq_len, max_seq_len, embedding_dimension, true, false, inverse_sqrt_dimension, 0.0f);
-		matmult(seq_input, key_gradient, gradients + embedding_dimension * embedding_dimension, embedding_dimension, max_seq_len, embedding_dimension, true, false, 1.0f, 1.0f);
-		matmult(query_gradient, query_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
-		matmult(key_gradient, key_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
-		matmult(value_gradient, value_weights, seq_output_grad, max_seq_len, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
-		sequence_lengths[seq] = original_len;
-		offset += max_seq_len * embedding_dimension;
-		upstream_offset += actual_len * embedding_dimension;
+		matmult(score_gradients, query_buffer, key_gradient, maximum_sequence_length, maximum_sequence_length, embedding_dimension, true, false, inverse_sqrt_dimension, 0.0f);
+		matmult(sequence_input, key_gradient, weight_gradients_pointer + embedding_dimension * embedding_dimension, embedding_dimension, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 1.0f);
+		matmult(query_gradient, query_weights, sequence_output_gradient, maximum_sequence_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
+		matmult(key_gradient, key_weights, sequence_output_gradient, maximum_sequence_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		matmult(value_gradient, value_weights, sequence_output_gradient, maximum_sequence_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		sequence_lengths[sequence_index] = original_length;
+		current_offset += maximum_sequence_length * embedding_dimension;
+		upstream_offset += actual_length * embedding_dimension;
 	}
 };
 #ifndef TRAINING_ON
 HookFunc AttentionForwardWithCache = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
 	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
 	int embedding_dimension = feature_count;
-	int max_seq_len = parametric_layer->extra_args[0];
-	int kv_cache_idx = parametric_layer->extra_args[1];
+	int maximum_sequence_length = parametric_layer->extra_args[0];
+	int cached_pool_index = parametric_layer->extra_args[1];
 	float* weight_matrix = parametric_layer->weights_begin;
 	float* query_weights = weight_matrix;
 	float* key_weights = weight_matrix + embedding_dimension * embedding_dimension;
 	float* value_weights = weight_matrix + 2 * embedding_dimension * embedding_dimension;
-	float* query = parametric_layer->scratch_pointer;
-	float* key = query + max_seq_len * embedding_dimension;
-	float* value = key + max_seq_len * embedding_dimension;
-	float* attention_scores = value + max_seq_len * embedding_dimension;
+	float* query_buffer = parametric_layer->scratch_pointer;
+	float* key_buffer = query_buffer + maximum_sequence_length * embedding_dimension;
+	float* value_buffer = key_buffer + maximum_sequence_length * embedding_dimension;
+	float* attention_scores = value_buffer + maximum_sequence_length * embedding_dimension;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
-	std::vector<float>& cache = kv_cache_pool[kv_cache_idx];
-	int offset = 0;
-	for (int seq = 0; seq < batch_count; ++seq) {
-		int actual_len = sequence_lengths[seq];
-		float* seq_input = preactivation_values + offset;
-		float* seq_output = output_values + offset;
-		matmult(seq_input, query_weights, query, actual_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(seq_input, key_weights, key, actual_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(seq_input, value_weights, value, actual_len, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		int cached_len = cache.size() / (2 * embedding_dimension);
-		int total_len = cached_len + actual_len;
-		cache.resize(total_len * 2 * embedding_dimension);
-		std::copy(key, key + actual_len * embedding_dimension, cache.begin() + cached_len * embedding_dimension);
-		std::copy(value, value + actual_len * embedding_dimension, cache.begin() + total_len * embedding_dimension + cached_len * embedding_dimension);
+	std::vector<float>& cache = kv_cache_pool[cached_pool_index];
+	int current_offset = 0;
+	for (int sequence_index = 0; sequence_index < batch_count; ++sequence_index) {
+		int actual_length = sequence_lengths[sequence_index];
+		float* sequence_input = preactivation_values + current_offset;
+		float* sequence_output = output_values + current_offset;
+		matmult(sequence_input, query_weights, query_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, key_weights, key_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, value_weights, value_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		int cached_length = cache.size() / (2 * embedding_dimension);
+		int total_length = cached_length + actual_length;
+		cache.resize(total_length * 2 * embedding_dimension);
+		std::copy(key_buffer, key_buffer + actual_length * embedding_dimension, cache.begin() + cached_length * embedding_dimension);
+		std::copy(value_buffer, value_buffer + actual_length * embedding_dimension, cache.begin() + total_length * embedding_dimension + cached_length * embedding_dimension);
 		float* all_keys = cache.data();
-		float* all_values = cache.data() + total_len * embedding_dimension;
-		matmult(query, all_keys, attention_scores, actual_len, embedding_dimension, total_len, false, true, inverse_sqrt_dimension, 0.0f);
-		for (int row = 0; row < actual_len; ++row) {
-			for (int col = cached_len + row + 1; col < total_len; ++col) {
-				attention_scores[row * total_len + col] = -1e30f;
+		float* all_values = cache.data() + total_length * embedding_dimension;
+		matmult(query_buffer, all_keys, attention_scores, actual_length, embedding_dimension, total_length, false, true, inverse_sqrt_dimension, 0.0f);
+		for (int row_index = 0; row_index < actual_length; ++row_index) {
+			for (int col_index = cached_length + row_index + 1; col_index < total_length; ++col_index) {
+				attention_scores[row_index * total_length + col_index] = -1e30f;
 			}
 		}
-		for (int row = 0; row < actual_len; ++row) {
-			float row_max = attention_scores[row * total_len];
-			for (int col = 1; col < total_len; ++col) {
-				if (attention_scores[row * total_len + col] > row_max) row_max = attention_scores[row * total_len + col];
+		for (int row_index = 0; row_index < actual_length; ++row_index) {
+			float row_maximum = attention_scores[row_index * total_length];
+			for (int col_index = 1; col_index < total_length; ++col_index) {
+				if (attention_scores[row_index * total_length + col_index] > row_maximum) row_maximum = attention_scores[row_index * total_length + col_index];
 			}
-			float row_sum = 0.0f;
-			for (int col = 0; col < total_len; ++col) {
-				row_sum += std::exp(attention_scores[row * total_len + col] - row_max);
+			float row_exponential_sum = 0.0f;
+			for (int col_index = 0; col_index < total_length; ++col_index) {
+				row_exponential_sum += std::exp(attention_scores[row_index * total_length + col_index] - row_maximum);
 			}
-			for (int col = 0; col < total_len; ++col) {
-				attention_scores[row * total_len + col] = std::exp(attention_scores[row * total_len + col] - row_max) / row_sum;
+			for (int col_index = 0; col_index < total_length; ++col_index) {
+				attention_scores[row_index * total_length + col_index] = std::exp(attention_scores[row_index * total_length + col_index] - row_maximum) / row_exponential_sum;
 			}
 		}
-		matmult(attention_scores, all_values, seq_output, actual_len, total_len, embedding_dimension, false, false, 1.0f, 0.0f);
-		offset += max_seq_len * embedding_dimension;
+		matmult(attention_scores, all_values, sequence_output, actual_length, total_length, embedding_dimension, false, false, 1.0f, 0.0f);
+		current_offset += maximum_sequence_length * embedding_dimension;
 	}
 };
 HookDerivative AttentionDerivativeWithCache = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 };
-
-inline HookFunc LearnableLayerNorm(LayerArgs& args) {
-	args.extra_weights += args.layer_size * 2;
+#endif
+inline HookFunc LearnableLayerNorm(LayerArgs& layer_arguments) {
+	layer_arguments.extra_weights += layer_arguments.layer_size * 2;
 	return LearnableLayerNormImpl;
 }
-inline HookDerivative LearnableLayerNormDerivative(LayerArgs& args) {
+inline HookDerivative LearnableLayerNormDerivative(LayerArgs& layer_arguments) {
 	return LearnableLayerNormDerivativeImpl;
 }
-inline HookFunc RMSNorm(LayerArgs& args) {
-	args.extra_weights += args.layer_size;
+inline HookFunc RMSNorm(LayerArgs& layer_arguments) {
+	layer_arguments.extra_weights += layer_arguments.layer_size;
 	return RMSNormImpl;
 }
-inline HookDerivative RMSNormDerivative(LayerArgs& args) {
+inline HookDerivative RMSNormDerivative(LayerArgs& layer_arguments) {
 	return RMSNormDerivativeImpl;
 }
-
 #endif
 #endif
+END2763

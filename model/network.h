@@ -37,6 +37,7 @@ struct Layer {
 	float* previous_inputs = nullptr;
 	float* previous_preactivations = nullptr;
 	float* weight_gradients = nullptr;
+	float* extra_weight_gradients = nullptr;
 	float* output_pointer = nullptr;
 	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices);
 	#endif
@@ -58,6 +59,7 @@ struct ParametricLayer {
 	float* previous_inputs = nullptr;
 	float* previous_preactivations = nullptr;
 	float* weight_gradients = nullptr;
+	float* extra_weight_gradients = nullptr;
 	float* output_pointer = nullptr;
 	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices);
 	#endif
