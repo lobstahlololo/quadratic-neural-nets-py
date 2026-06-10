@@ -72,10 +72,10 @@ HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batch_co
 		}
 	}
 };
-HookFunc LearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
-	float* gamma = parametric_layer->weights_begin;
-	float* beta = gamma + parametric_layer->input;
+HookFunc LearnableLayerNormImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+	float* extra_w = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
+	float* gamma = extra_w;
+	float* beta = gamma + feature_count;
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
 		int rows = sequence_lengths[b];
@@ -94,13 +94,13 @@ HookFunc LearnableLayerNorm = [](LayerRef layer, int batch_count, std::vector<in
 		}
 	}
 };
-HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
-	float* gamma = parametric_layer->weights_begin;
+HookDerivative LearnableLayerNormDerivativeImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+	float* extra_w = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
+	float* extra_g = std::visit([](auto* l) { return l->extra_weight_gradients; }, layer);
+	float* gamma = extra_w;
 	float* beta = gamma + feature_count;
-	float* weight_gradients_ptr = parametric_layer->weight_gradients;
-	float* gamma_gradient = weight_gradients_ptr;
-	float* beta_gradient = weight_gradients_ptr + feature_count;
+	float* gamma_gradient = extra_g;
+	float* beta_gradient = extra_g + feature_count;
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
 		int rows = sequence_lengths[b];
@@ -135,9 +135,8 @@ HookDerivative LearnableLayerNormDerivative = [](LayerRef layer, int batch_count
 		}
 	}
 };
-HookFunc RMSNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
-	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
-	float* gamma = parametric_layer->weights_begin;
+HookFunc RMSNormImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* output_values, int feature_count) {
+	float* gamma = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
 		int rows = sequence_lengths[b];
@@ -153,10 +152,9 @@ HookFunc RMSNorm = [](LayerRef layer, int batch_count, std::vector<int>& sequenc
 		}
 	}
 };
-HookDerivative RMSNormDerivative = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
-	ParametricLayer* parametric_layer = std::get<ParametricLayer*>(layer);
-	float* gamma = parametric_layer->weights_begin;
-	float* gamma_gradient = parametric_layer->weight_gradients;
+HookDerivative RMSNormDerivativeImpl = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
+	float* gamma = std::visit([](auto* l) { return l->extra_weights_begin; }, layer);
+	float* gamma_gradient = std::visit([](auto* l) { return l->extra_weight_gradients; }, layer);
 	int offset = 0;
 	for (int b = 0; b < batch_count; ++b) {
 		int rows = sequence_lengths[b];
@@ -537,5 +535,21 @@ HookFunc AttentionForwardWithCache = [](LayerRef layer, int batch_count, std::ve
 };
 HookDerivative AttentionDerivativeWithCache = [](LayerRef layer, int batch_count, std::vector<int>& sequence_lengths, float* original_inputs, float* preactivation_values, float* upstream_gradient, float* output_gradient, int feature_count, const std::vector<int>& correct_indices) {
 };
+
+inline HookFunc LearnableLayerNorm(LayerArgs& args) {
+	args.extra_weights += args.layer_size * 2;
+	return LearnableLayerNormImpl;
+}
+inline HookDerivative LearnableLayerNormDerivative(LayerArgs& args) {
+	return LearnableLayerNormDerivativeImpl;
+}
+inline HookFunc RMSNorm(LayerArgs& args) {
+	args.extra_weights += args.layer_size;
+	return RMSNormImpl;
+}
+inline HookDerivative RMSNormDerivative(LayerArgs& args) {
+	return RMSNormDerivativeImpl;
+}
+
 #endif
 #endif

@@ -5,6 +5,9 @@
 #include <cmath>
 #include <unordered_map>
 #include <algorithm>
+
+#define TRAINING_ON
+
 #include "../model/network.h"
 #include "../train/train.h"
 #include "../math/math.h"
@@ -15,6 +18,8 @@
 #include "../boilerplate/losses.h"
 #include "../boilerplate/weight_inits.h"
 #include "../train/train.h"
+
+
 int main() {
     int target_vocab_size = 256;
     int embedding_dimension = 64;
@@ -61,11 +66,19 @@ int main() {
     std::cout << "Total prediction rows: " << total_rows << "\n";
     std::vector<LayerArgs> architecture;
     architecture.push_back(InputLayer(1));
-    architecture.push_back(EmbeddingLayer(vocabulary_size, embedding_dimension));
-    architecture.push_back(LearnableLayerNormLayer(embedding_dimension));
+    
+    LayerArgs emb = EmbeddingLayer(vocabulary_size, embedding_dimension);
+    emb.hooks.push_back(LearnableLayerNorm(emb));
+    emb.hook_gradients.push_back(LearnableLayerNormDerivative(emb));
+    architecture.push_back(emb);
+    
     architecture.push_back(AttentionLayer(embedding_dimension, sequence_length));
-    architecture.push_back(FeedForwardLayer(embedding_dimension, embedding_dimension, ReLuHook, ReLuGradHook));
-    architecture.push_back(LearnableLayerNormLayer(embedding_dimension));
+    
+    LayerArgs ff = FeedForwardLayer(embedding_dimension, embedding_dimension, ReLuHook, ReLuGradHook);
+    ff.hooks.push_back(LearnableLayerNorm(ff));
+    ff.hook_gradients.push_back(LearnableLayerNormDerivative(ff));
+    architecture.push_back(ff);
+    
     LayerArgs output_layer;
     output_layer.layer_size = vocabulary_size;
     output_layer.kind = Quadratic;
@@ -82,7 +95,7 @@ int main() {
                    CrossEntropyLossForSoftmax,
                    CrossEntropyLossForSoftmaxDerivative,
                    total_epochs, batch_size, sequence_lengths);
-    save_weights("transformer_weights.bin");
+    save_weights("transformer_weights.bin", true);
     save_vocabulary(vocabulary, "transformer_vocab.txt");
     std::cout << "Training finished. Weights and vocabulary saved.\n";
     std::cout << "\nGenerating text...\n";

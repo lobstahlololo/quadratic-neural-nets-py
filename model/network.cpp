@@ -151,7 +151,7 @@ float* ParametricLayer::backward(float* upstream_gradient, int batch_count, std:
 	return upstream_gradient;
 }
 #endif
-void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int buffer_multiplier) {
+void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_path, WeightInitFunc initialiser, int buffer_multiplier, setupNNHookFunction setup_hook) {
 	layers.clear();
 	weights.clear();
 	layer_sizes.clear();
@@ -172,13 +172,16 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			continue;
 		}
 		if (args.kind == Parametric) {
-			network_size += prev->layer_size * args.weights_per_input;
+			network_size += prev->layer_size * args.weights_per_input + args.extra_weights;
 		} else {
-			network_size += args.layer_size + args.layer_size * prev->layer_size * 2;
+			network_size += args.layer_size + args.layer_size * prev->layer_size * 2 + args.extra_weights;
 		}
 		layer_sizes.push_back(args.layer_size);
 		prev = &args;
 	}
+    if (!layersAdd.empty() && layersAdd[0].extra_weights > 0) {
+        network_size += layersAdd[0].extra_weights;
+    }
 	auto resizeBuffers = [&](size_t size) {
 		output_buffers.first.resize(size);
 		output_buffers.second.resize(size);
@@ -202,13 +205,28 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 		if (!file) {
 			throw std::runtime_error("wrong filepath");
 		}
-		file.seekg(0, std::ios::end);
-		std::streampos fileSize = file.tellg();
-		file.seekg(0, std::ios::beg);
-		if (static_cast<long>(network_size * sizeof(float)) != fileSize) {
-			throw std::runtime_error("wrong file size relation to weights");
+		char magic[4];
+		if (file.read(magic, 4) && std::string(magic, 4) == "Q2CP") {
+			uint8_t* raw = reinterpret_cast<uint8_t*>(weights.data());
+			size_t raw_size = network_size * sizeof(float);
+			size_t i = 0;
+			while (i < raw_size && file) {
+				uint8_t count, val;
+				if (!file.read(reinterpret_cast<char*>(&count), 1)) break;
+				if (!file.read(reinterpret_cast<char*>(&val), 1)) break;
+				for (size_t c = 0; c < count && i < raw_size; ++c) {
+					raw[i++] = val;
+				}
+			}
+		} else {
+			file.seekg(0, std::ios::end);
+			std::streampos fileSize = file.tellg();
+			file.seekg(0, std::ios::beg);
+			if (static_cast<long>(network_size * sizeof(float)) != fileSize) {
+				throw std::runtime_error("wrong file size relation to weights");
+			}
+			file.read(reinterpret_cast<char*>(weights.data()), network_size * sizeof(float));
 		}
-		file.read(reinterpret_cast<char*>(weights.data()), network_size * sizeof(float));
 	}
 
 	float* weight_start = weights.data();
@@ -226,6 +244,8 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			layer.output = layersAdd[i].layer_size;
 			layer.weights_per_input = layersAdd[i].weights_per_input;
 			layer.weights_begin = (i == 0) ? weight_start : weight_start + accumulated_weights;
+			layer.extra_weights_size = layersAdd[i].extra_weights;
+			layer.extra_weights_begin = layer.weights_begin + layer.input * layer.weights_per_input;
 			layer.scratch_size = layersAdd[i].scratch_size;
 			layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
 			scratch_offset += layer.scratch_size;
@@ -233,6 +253,7 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			#ifdef TRAINING_ON
 			layer.previous_preactivations = global_preactivations.data() + previous_output_offset;
 			layer.weight_gradients = global_grads.data() + gradient_offset;
+			layer.extra_weight_gradients = layer.weight_gradients + layer.input * layer.weights_per_input;
 			layer.output_pointer = global_inputs.data() + previous_output_offset;
 			if (i > 0) {
 				layer.previous_inputs = std::visit([](auto& l) -> float* { return l.output_pointer; }, layers.back());
@@ -242,8 +263,8 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			#endif
 			layers.push_back(layer);
 			previous_output_offset += output_data_size;
-			if (i > 0) {
-				size_t param_size = layer.input * layer.weights_per_input;
+			size_t param_size = layer.input * layer.weights_per_input + layer.extra_weights_size;
+			if (i > 0 || layer.extra_weights_size > 0) {
 				gradient_offset += param_size;
 				accumulated_weights += param_size;
 			}
@@ -259,6 +280,8 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 				layer.size = 0;
 				layer.neurons = layersAdd[i].layer_size;
 				layer.weights_begin = weight_start;
+				layer.extra_weights_size = layersAdd[i].extra_weights;
+				layer.extra_weights_begin = layer.weights_begin;
 				layer.scratch_size = 0;
 				layer.scratch_pointer = nullptr;
 			} else {
@@ -266,6 +289,8 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 				layer.output = layersAdd[i].layer_size;
 				layer.size = layersAdd[i].layer_size + layersAdd[i].layer_size * layersAdd[i-1].layer_size * 2;
 				layer.weights_begin = weight_start + accumulated_weights;
+				layer.extra_weights_size = layersAdd[i].extra_weights;
+				layer.extra_weights_begin = layer.weights_begin + layer.size;
 				layer.scratch_size = layersAdd[i].scratch_size;
 				layer.scratch_pointer = layer.scratch_size > 0 ? global_scratch_buffer.data() + scratch_offset : nullptr;
 				scratch_offset += layer.scratch_size;
@@ -277,6 +302,7 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			#ifdef TRAINING_ON
 			layer.previous_preactivations = global_preactivations.data() + previous_output_offset;
 			layer.weight_gradients = global_grads.data() + gradient_offset;
+			layer.extra_weight_gradients = layer.weight_gradients + layer.size;
 			layer.output_pointer = global_inputs.data() + previous_output_offset;
 			if (i > 0) {
 				layer.previous_inputs = std::visit([](auto& l) -> float* { return l.output_pointer; }, layers.back());
@@ -286,22 +312,35 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			#endif
 			layers.push_back(layer);
 			previous_output_offset += output_data_size;
-			if (i > 0) {
-				gradient_offset += layer.size;
-				accumulated_weights += layer.size;
+			if (i > 0 || layer.extra_weights_size > 0) {
+				gradient_offset += layer.size + layer.extra_weights_size;
+				accumulated_weights += layer.size + layer.extra_weights_size;
 			}
 		}
 	}
 	is_setup = true;
+	if (setup_hook) setup_hook();
 }
 
-void save_weights(std::string path) {
-	
+void save_weights(std::string path, bool compress) {
 	std::ofstream file(path, std::ios::binary);
 	if (!file) {
 		throw std::runtime_error("wrong filepath");
 	}
-	file.write(reinterpret_cast<const char*>(weights.data()), network_size * sizeof(float));
-	
-
+	if (compress) {
+		file.write("Q2CP", 4);
+		const uint8_t* raw = reinterpret_cast<const uint8_t*>(weights.data());
+		size_t raw_size = network_size * sizeof(float);
+		for (size_t i = 0; i < raw_size; ) {
+			uint8_t val = raw[i];
+			size_t count = 1;
+			while (i + count < raw_size && count < 255 && raw[i + count] == val) count++;
+			uint8_t c = static_cast<uint8_t>(count);
+			file.write(reinterpret_cast<const char*>(&c), 1);
+			file.write(reinterpret_cast<const char*>(&val), 1);
+			i += count;
+		}
+	} else {
+		file.write(reinterpret_cast<const char*>(weights.data()), network_size * sizeof(float));
+	}
 }

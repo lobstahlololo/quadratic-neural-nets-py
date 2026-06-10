@@ -20,26 +20,6 @@ inline LayerArgs SoftmaxLayer(int model_dimension) {
 	args.scratch_size = 0;
 	return args;
 }
-inline LayerArgs LearnableLayerNormLayer(int model_dimension) {
-	LayerArgs args;
-	args.layer_size = model_dimension;
-	args.kind = Parametric;
-	args.weights_per_input = 2;
-	args.hooks = { LearnableLayerNorm };
-	args.hook_gradients = { LearnableLayerNormDerivative };
-	args.scratch_size = 0;
-	return args;
-}
-inline LayerArgs RMSNormLayer(int model_dimension) {
-	LayerArgs args;
-	args.layer_size = model_dimension;
-	args.kind = Parametric;
-	args.weights_per_input = 1;
-	args.hooks = { RMSNorm };
-	args.hook_gradients = { RMSNormDerivative };
-	args.scratch_size = 0;
-	return args;
-}
 inline LayerArgs EmbeddingLayer(int vocabulary_size, int embedding_dimension) {
 	LayerArgs args;
 	args.layer_size = embedding_dimension;

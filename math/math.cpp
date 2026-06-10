@@ -1,5 +1,8 @@
 #ifndef QQ_MATH_CPP
 #define QQ_MATH_CPP
+#include <cstdlib>
+#include <iostream>
+#include <chrono>
 #include "math.h"
 #ifdef QQ_BLAS_NPU
 #include "npublas.h"
@@ -20,6 +23,9 @@
 #include "fixedpoint.h"
 #endif
 
+void preload() {
+}
+
 void matmult_impl(const float* matrix_a, const float* matrix_b, float* result,
              int rows_a, int inner_dimension, int cols_b,
              bool transpose_a, bool transpose_b,
@@ -27,21 +33,53 @@ void matmult_impl(const float* matrix_a, const float* matrix_b, float* result,
     const float* local_a = matrix_a;
     const float* local_b = matrix_b;
 #ifdef QQ_BLAS_INTEIGHT
-    FixedPointBlock<int8_t> block_a(rows_a * inner_dimension);
-    block_a.fit_exponent(matrix_a, rows_a * inner_dimension);
-    block_a.floats_to_mantissa(matrix_a, rows_a * inner_dimension, 4);
+    int block_size = inner_dimension;
+    FixedPointBlock<int8_t> block_a(rows_a, inner_dimension, block_size, true);
+    block_a.fit_exponent(matrix_a);
+    block_a.floats_to_mantissa(matrix_a, 4);
 
-    FixedPointBlock<int8_t> block_b(inner_dimension * cols_b);
-    block_b.fit_exponent(matrix_b, inner_dimension * cols_b);
-    block_b.floats_to_mantissa(matrix_b, inner_dimension * cols_b, 4);
+    FixedPointBlock<int8_t> block_b(inner_dimension, cols_b, block_size, false);
+    block_b.fit_exponent(matrix_b);
+    block_b.floats_to_mantissa(matrix_b, 4);
 
-    ScratchpadBuffer quant_a(rows_a * inner_dimension);
-    ScratchpadBuffer quant_b(inner_dimension * cols_b);
-    block_a.mantissa_to_floats(quant_a.ptr, rows_a * inner_dimension, 4);
-    block_b.mantissa_to_floats(quant_b.ptr, inner_dimension * cols_b, 4);
+    FixedPointBlock<int64_t> block_c(rows_a, cols_b, 1, true);
+    int num_blocks_k = (inner_dimension + block_size - 1) / block_size;
 
-    local_a = quant_a.ptr;
-    local_b = quant_b.ptr;
+    for (int i = 0; i < rows_a; ++i) {
+        for (int j = 0; j < cols_b; ++j) {
+            int64_t accumulator = 0;
+            if (!transpose_a && !transpose_b) {
+                for (int k = 0; k < inner_dimension; ++k) {
+                    accumulator += (int64_t)block_a.mantissa[i * inner_dimension + k] * block_b.mantissa[k * cols_b + j];
+                }
+            } else if (transpose_a && !transpose_b) {
+                for (int k = 0; k < inner_dimension; ++k) {
+                    accumulator += (int64_t)block_a.mantissa[k * rows_a + i] * block_b.mantissa[k * cols_b + j];
+                }
+            } else if (!transpose_a && transpose_b) {
+                for (int k = 0; k < inner_dimension; ++k) {
+                    accumulator += (int64_t)block_a.mantissa[i * inner_dimension + k] * block_b.mantissa[j * inner_dimension + k];
+                }
+            } else {
+                for (int k = 0; k < inner_dimension; ++k) {
+                    accumulator += (int64_t)block_a.mantissa[k * rows_a + i] * block_b.mantissa[j * inner_dimension + k];
+                }
+            }
+            block_c.mantissa[i * cols_b + j] = accumulator;
+            int32_t total_exp = 0;
+            for (int b = 0; b < num_blocks_k; ++b) {
+                total_exp += block_a.exponents[i * num_blocks_k + b] + block_b.exponents[b * cols_b + j];
+            }
+            block_c.exponents[i * cols_b + j] = total_exp;
+        }
+    }
+
+    block_c.mantissa_to_floats_product(result, 4);
+
+    for (int i = 0; i < rows_a * cols_b; ++i) {
+        result[i] = (beta == 0.0f ? 0.0f : beta * result[i]) + alpha * result[i];
+    }
+    return;
 #endif
 #ifdef QQ_BLAS_NPU
     if (!transpose_a && !transpose_b && alpha == 1.0f && beta == 0.0f) {
@@ -86,25 +124,6 @@ void matmult_impl(const float* matrix_a, const float* matrix_b, float* result,
         bool failed = true;
 
         CLSharedContext() {
-            const char* paths[] = {
-                "/vendor/lib64/libOpenCL.so",
-                "/system/vendor/lib64/libOpenCL.so",
-                "/vendor/lib64/egl/libGLES_mali.so",
-                "/system/vendor/lib64/egl/libGLES_mali.so",
-                "/system/lib64/libOpenCL.so",
-                "/vendor/lib/libOpenCL.so",
-                "/system/vendor/lib/libOpenCL.so",
-                "/vendor/lib/egl/libGLES_mali.so",
-                "/system/vendor/lib/egl/libGLES_mali.so",
-                "/system/lib/libOpenCL.so"
-            };
-            for (const char* path : paths) {
-                void* handle = dlopen(path, RTLD_NOW | RTLD_GLOBAL);
-                if (handle) {
-                    setenv("OCL_ICD_VENDORS", path, 1);
-                    break;
-                }
-            }
             cl_uint num_platforms = 0;
             if (clGetPlatformIDs(0, nullptr, &num_platforms) != CL_SUCCESS || num_platforms == 0) return;
             cl_platform_id platforms[16];
@@ -287,11 +306,30 @@ naive_fallback_cl:
 void matmult(const float* matrix_a, const float* matrix_b, float* result,
              int rows_a, int inner_dimension, int cols_b,
              bool transpose_a, bool transpose_b,
-             float alpha, float beta) {
+             float alpha, float beta,
+             int split_into, MatmulInnerHook inner_hook) {
+    preload();
     bool measure_tops = (std::rand() % 10000 == 0);
     auto start_time = measure_tops ? std::chrono::high_resolution_clock::now() : std::chrono::time_point<std::chrono::high_resolution_clock>();
     
-    matmult_impl(matrix_a, matrix_b, result, rows_a, inner_dimension, cols_b, transpose_a, transpose_b, alpha, beta);
+    if (split_into > rows_a) {
+        throw std::runtime_error("More chunks than rows in A");
+    }
+    
+    if (split_into <= 1) {
+        matmult_impl(matrix_a, matrix_b, result, rows_a, inner_dimension, cols_b, transpose_a, transpose_b, alpha, beta);
+        if (inner_hook) inner_hook(matrix_a, matrix_b, result, rows_a, inner_dimension, cols_b, 0, 1);
+    } else {
+        int chunk_rows = rows_a / split_into;
+        for (int i = 0; i < split_into; ++i) {
+            int start_row = i * chunk_rows;
+            int current_rows = (i == split_into - 1) ? (rows_a - start_row) : chunk_rows;
+            const float* current_a = matrix_a + start_row * inner_dimension;
+            float current_beta = (i == 0) ? beta : 1.0f;
+            matmult_impl(current_a, matrix_b, result, current_rows, inner_dimension, cols_b, transpose_a, transpose_b, alpha, current_beta);
+            if (inner_hook) inner_hook(current_a, matrix_b, result, current_rows, inner_dimension, cols_b, i, split_into);
+        }
+    }
     
     if (measure_tops) {
         auto end_time = std::chrono::high_resolution_clock::now();
