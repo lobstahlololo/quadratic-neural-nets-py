@@ -6,6 +6,9 @@
 #include <cmath>
 #include <limits>
 #include <new>
+#include <queue>
+#include <future>
+#include <vector>
 inline uint32_t xorshift_32bits(uint32_t& random_state) {
     random_state ^= random_state << 13;
     random_state ^= random_state >> 17;
@@ -19,28 +22,26 @@ inline uint64_t xorshift_64bits(uint64_t& random_state) {
     return random_state;
 }
 template<typename WordType, typename OutType>
-struct StochasticRoundingKernel {
-    static inline void process_block(const float* input_array, OutType* output_array, int start_index, int count, WordType current_random_word, int precision, uint32_t fractional_mask) {
-        for (int element_index = 0; element_index < count; ++element_index) {
-            int flat_index = start_index + element_index;
-            float input_value = input_array[flat_index];
-            uint32_t raw_bits;
-            std::memcpy(&raw_bits, &input_value, sizeof(uint32_t));
-            uint32_t absolute_raw_bits = raw_bits & 0x7FFFFFFF;
-            uint32_t exponent_bits = (absolute_raw_bits >> 23) & 0xFF;
-            uint32_t random_bits = (current_random_word >> (element_index * precision)) & fractional_mask;
-            uint32_t mantissa_value = (1U << 23) | (absolute_raw_bits & 0x7FFFFF);
-            int bit_shift = 150 - precision - exponent_bits;
-            uint32_t scaled_fixed_value = (bit_shift >= 0 && bit_shift < 32) ? (mantissa_value >> bit_shift) : ((bit_shift < 0) ? (mantissa_value << -bit_shift) : 0);
-            uint32_t fractional_bits_mask = scaled_fixed_value & fractional_mask;
-            uint32_t integer_part_value = scaled_fixed_value >> precision;
-            uint32_t rounded_magnitude = integer_part_value + ((fractional_bits_mask + random_bits) >> precision);
-            int32_t sign_bit_mask = (int32_t)raw_bits >> 31;
-            int32_t rounded_integer = (rounded_magnitude + sign_bit_mask) ^ sign_bit_mask;
-            output_array[flat_index] = (exponent_bits == 0) ? (OutType)0 : (OutType)rounded_integer;
-        }
+inline void process_rounding_block(const float* input_array, OutType* output_array, int start_index, int count, WordType current_random_word, int precision, uint32_t fractional_mask) {
+    for (int element_index = 0; element_index < count; ++element_index) {
+        int flat_index = start_index + element_index;
+        float input_value = input_array[flat_index];
+        uint32_t raw_bits;
+        std::memcpy(&raw_bits, &input_value, sizeof(uint32_t));
+        uint32_t absolute_raw_bits = raw_bits & 0x7FFFFFFF;
+        uint32_t exponent_bits = (absolute_raw_bits >> 23) & 0xFF;
+        uint32_t random_bits = (current_random_word >> (element_index * precision)) & fractional_mask;
+        uint32_t mantissa_value = (1U << 23) | (absolute_raw_bits & 0x7FFFFF);
+        int bit_shift = 150 - precision - exponent_bits;
+        uint32_t scaled_fixed_value = (bit_shift >= 0 && bit_shift < 32) ? (mantissa_value >> bit_shift) : ((bit_shift < 0) ? (mantissa_value << -bit_shift) : 0);
+        uint32_t fractional_bits_mask = scaled_fixed_value & fractional_mask;
+        uint32_t integer_part_value = scaled_fixed_value >> precision;
+        uint32_t rounded_magnitude = integer_part_value + ((fractional_bits_mask + random_bits) >> precision);
+        int32_t sign_bit_mask = (int32_t)raw_bits >> 31;
+        int32_t rounded_integer = (rounded_magnitude + sign_bit_mask) ^ sign_bit_mask;
+        output_array[flat_index] = (exponent_bits == 0) ? (OutType)0 : (OutType)rounded_integer;
     }
-};
+}
 template<typename OutType>
 inline void stochastic_round_array(const float* input_array, OutType* output_array, int array_size, int precision = 4) {
     uint64_t seed_word0 = 2463534242ULL;
@@ -60,10 +61,10 @@ inline void stochastic_round_array(const float* input_array, OutType* output_arr
         uint64_t random_word1 = xorshift_64bits(seed_word1);
         uint64_t random_word2 = xorshift_64bits(seed_word2);
         uint64_t random_word3 = xorshift_64bits(seed_word3);
-        StochasticRoundingKernel<uint64_t, OutType>::process_block(input_array, output_array, loop_index, elements_per_word, random_word0, precision, fractional_mask);
-        StochasticRoundingKernel<uint64_t, OutType>::process_block(input_array, output_array, loop_index + elements_per_word, elements_per_word, random_word1, precision, fractional_mask);
-        StochasticRoundingKernel<uint64_t, OutType>::process_block(input_array, output_array, loop_index + 2 * elements_per_word, elements_per_word, random_word2, precision, fractional_mask);
-        StochasticRoundingKernel<uint64_t, OutType>::process_block(input_array, output_array, loop_index + 3 * elements_per_word, elements_per_word, random_word3, precision, fractional_mask);
+        process_rounding_block<uint64_t, OutType>(input_array, output_array, loop_index, elements_per_word, random_word0, precision, fractional_mask);
+        process_rounding_block<uint64_t, OutType>(input_array, output_array, loop_index + elements_per_word, elements_per_word, random_word1, precision, fractional_mask);
+        process_rounding_block<uint64_t, OutType>(input_array, output_array, loop_index + 2 * elements_per_word, elements_per_word, random_word2, precision, fractional_mask);
+        process_rounding_block<uint64_t, OutType>(input_array, output_array, loop_index + 3 * elements_per_word, elements_per_word, random_word3, precision, fractional_mask);
     }
     if (loop_index < array_size) {
         uint64_t seed_word_remainder = 2463534242ULL;
@@ -181,11 +182,16 @@ template<typename T>
 struct FixedPointBlock {
     T* mantissa;
     int32_t* exponents;
+    float* means;
+    float* std_devs;
+    int* precisions;
     int rows;
     int cols;
     int block_size;
     bool block_columns;
     int num_blocks;
+    float mean;
+    float std_dev;
     FixedPointBlock(int num_rows, int num_columns, int target_block_size, bool use_block_columns) {
         rows = num_rows;
         cols = num_columns;
@@ -199,12 +205,22 @@ struct FixedPointBlock {
             num_blocks = (rows + block_size - 1) / block_size;
             exponents = (int32_t*)Scratchpad::alloc(num_blocks * cols * sizeof(int32_t));
         }
+        int total_blocks = block_columns ? (rows * num_blocks) : (num_blocks * cols);
+        means = (float*)Scratchpad::alloc(total_blocks * sizeof(float));
+        std_devs = (float*)Scratchpad::alloc(total_blocks * sizeof(float));
+        precisions = (int*)Scratchpad::alloc(total_blocks * sizeof(int));
     }
     ~FixedPointBlock() {
         Scratchpad::free(mantissa);
         Scratchpad::free(exponents);
+        Scratchpad::free(means);
+        Scratchpad::free(std_devs);
+        Scratchpad::free(precisions);
     }
     void fit_exponent(const float* values) {
+        float global_sum = 0.0f;
+        float global_sum_squares = 0.0f;
+        int global_n = 0;
         if (block_columns) {
             int num_blocks_count = (cols + block_size - 1) / block_size;
             for (int row_index = 0; row_index < rows; ++row_index) {
@@ -212,16 +228,35 @@ struct FixedPointBlock {
                     uint32_t max_biased = 0;
                     int start_col = block_index * block_size;
                     int end_col = (start_col + block_size < cols) ? (start_col + block_size) : cols;
+                    float block_sum = 0.0f;
+                    float block_sum_squares = 0.0f;
+                    int block_n = 0;
                     for (int col_index = start_col; col_index < end_col; ++col_index) {
+                        float val = values[row_index * cols + col_index];
+                        global_sum += val;
+                        global_sum_squares += val * val;
+                        ++global_n;
+                        block_sum += val;
+                        block_sum_squares += val * val;
+                        ++block_n;
                         uint32_t absolute_raw_bits;
-                        std::memcpy(&absolute_raw_bits, &values[row_index * cols + col_index], sizeof(uint32_t));
+                        std::memcpy(&absolute_raw_bits, &val, sizeof(uint32_t));
                         absolute_raw_bits &= 0x7FFFFFFF;
                         uint32_t biased = (absolute_raw_bits >> 23) & 0xFF;
                         if (biased > max_biased) {
                             max_biased = biased;
                         }
                     }
-                    exponents[row_index * num_blocks_count + block_index] = (int32_t)max_biased - 127;
+                    int block_flat_idx = row_index * num_blocks_count + block_index;
+                    exponents[block_flat_idx] = (int32_t)max_biased - 127;
+                    if (block_n > 0) {
+                        means[block_flat_idx] = block_sum / block_n;
+                        float variance = (block_sum_squares / block_n) - (means[block_flat_idx] * means[block_flat_idx]);
+                        std_devs[block_flat_idx] = std::sqrt(std::max(0.0f, variance));
+                    } else {
+                        means[block_flat_idx] = 0.0f;
+                        std_devs[block_flat_idx] = 0.0f;
+                    }
                 }
             }
         } else {
@@ -231,35 +266,79 @@ struct FixedPointBlock {
                     uint32_t max_biased = 0;
                     int start_row = block_index * block_size;
                     int end_row = (start_row + block_size < rows) ? (start_row + block_size) : rows;
+                    float block_sum = 0.0f;
+                    float block_sum_squares = 0.0f;
+                    int block_n = 0;
                     for (int row_index = start_row; row_index < end_row; ++row_index) {
+                        float val = values[row_index * cols + col_index];
+                        global_sum += val;
+                        global_sum_squares += val * val;
+                        ++global_n;
+                        block_sum += val;
+                        block_sum_squares += val * val;
+                        ++block_n;
                         uint32_t absolute_raw_bits;
-                        std::memcpy(&absolute_raw_bits, &values[row_index * cols + col_index], sizeof(uint32_t));
+                        std::memcpy(&absolute_raw_bits, &val, sizeof(uint32_t));
                         absolute_raw_bits &= 0x7FFFFFFF;
                         uint32_t biased = (absolute_raw_bits >> 23) & 0xFF;
                         if (biased > max_biased) {
                             max_biased = biased;
                         }
                     }
-                    exponents[block_index * cols + col_index] = (int32_t)max_biased - 127;
+                    int block_flat_idx = block_index * cols + col_index;
+                    exponents[block_flat_idx] = (int32_t)max_biased - 127;
+                    if (block_n > 0) {
+                        means[block_flat_idx] = block_sum / block_n;
+                        float variance = (block_sum_squares / block_n) - (means[block_flat_idx] * means[block_flat_idx]);
+                        std_devs[block_flat_idx] = std::sqrt(std::max(0.0f, variance));
+                    } else {
+                        means[block_flat_idx] = 0.0f;
+                        std_devs[block_flat_idx] = 0.0f;
+                    }
                 }
             }
         }
+        if (global_n > 0) {
+            mean = global_sum / global_n;
+            float global_variance = (global_sum_squares / global_n) - (mean * mean);
+            std_dev = std::sqrt(std::max(0.0f, global_variance));
+        } else {
+            mean = 0.0f;
+            std_dev = 0.0f;
+        }
     }
-    void floats_to_mantissa(const float* floats_array, int precision = 4) {
+    void floats_to_mantissa(const float* floats_array, int fixed_exponent, int force_precision = 0, int z_sigma = 3, int other_exponent = 8, float other_std_dev = 0.532f) {
         if (block_columns) {
             float* temporary_buffer = new float[cols];
             int num_blocks_count = (cols + block_size - 1) / block_size;
             for (int row_index = 0; row_index < rows; ++row_index) {
                 for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
-                    int32_t exponent_val = exponents[row_index * num_blocks_count + block_index];
-                    float exponent_scale = std::ldexp(1.0f, -exponent_val);
+                    int block_flat_idx = row_index * num_blocks_count + block_index;
+                    int32_t exponent_val = (fixed_exponent != 0) ? fixed_exponent : exponents[block_flat_idx];
                     int start_col = block_index * block_size;
                     int end_col = (start_col + block_size < cols) ? (start_col + block_size) : cols;
                     int count = end_col - start_col;
+                    int bits_of_precision;
+                    if (force_precision > 0) {
+                        bits_of_precision = force_precision;
+                    } else {
+                        bits_of_precision = sizeof(T) * 8;
+                        bool does_not_fit = true;
+                        float b_std_dev = std_devs[block_flat_idx];
+                        while (does_not_fit && bits_of_precision > 1) {
+                            float std_dev_output = std::sqrt((float)count) * (other_std_dev * (std::pow(2.0f, (float)other_exponent) - 1)) * (b_std_dev * (std::pow(2.0f, (float)bits_of_precision - 1) - 1));
+                            does_not_fit = (z_sigma * std_dev_output > 32767.0f);
+                            if (does_not_fit) {
+                                --bits_of_precision;
+                            }
+                        }
+                    }
+                    precisions[block_flat_idx] = bits_of_precision;
+                    float exponent_scale = std::ldexp(1.0f, -exponent_val);
                     for (int col_index = 0; col_index < count; ++col_index) {
                         temporary_buffer[col_index] = floats_array[row_index * cols + start_col + col_index] * exponent_scale;
                     }
-                    stochastic_round_array(temporary_buffer, &mantissa[row_index * cols + start_col], count, precision);
+                    stochastic_round_array(temporary_buffer, &mantissa[row_index * cols + start_col], count, bits_of_precision);
                 }
             }
             delete[] temporary_buffer;
@@ -268,16 +347,33 @@ struct FixedPointBlock {
             int num_blocks_count = (rows + block_size - 1) / block_size;
             for (int col_index = 0; col_index < cols; ++col_index) {
                 for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
-                    int32_t exponent_val = exponents[block_index * cols + col_index];
-                    float exponent_scale = std::ldexp(1.0f, -exponent_val);
+                    int block_flat_idx = block_index * cols + col_index;
+                    int32_t exponent_val = (fixed_exponent != 0) ? fixed_exponent : exponents[block_flat_idx];
                     int start_row = block_index * block_size;
                     int end_row = (start_row + block_size < rows) ? (start_row + block_size) : rows;
                     int count = end_row - start_row;
+                    int bits_of_precision;
+                    if (force_precision > 0) {
+                        bits_of_precision = force_precision;
+                    } else {
+                        bits_of_precision = sizeof(T) * 8;
+                        bool does_not_fit = true;
+                        float b_std_dev = std_devs[block_flat_idx];
+                        while (does_not_fit && bits_of_precision > 1) {
+                            float std_dev_output = std::sqrt((float)count) * (other_std_dev * (std::pow(2.0f, (float)other_exponent) - 1)) * (b_std_dev * (std::pow(2.0f, (float)bits_of_precision - 1) - 1));
+                            does_not_fit = (z_sigma * std_dev_output > 32767.0f);
+                            if (does_not_fit) {
+                                --bits_of_precision;
+                            }
+                        }
+                    }
+                    precisions[block_flat_idx] = bits_of_precision;
+                    float exponent_scale = std::ldexp(1.0f, -exponent_val);
                     for (int row_index = 0; row_index < count; ++row_index) {
                         temporary_buffer[row_index] = floats_array[(start_row + row_index) * cols + col_index] * exponent_scale;
                     }
                     T* column_mantissa = new T[count];
-                    stochastic_round_array(temporary_buffer, column_mantissa, count, precision);
+                    stochastic_round_array(temporary_buffer, column_mantissa, count, bits_of_precision);
                     for (int row_index = 0; row_index < count; ++row_index) {
                         mantissa[(start_row + row_index) * cols + col_index] = column_mantissa[row_index];
                     }
@@ -287,13 +383,14 @@ struct FixedPointBlock {
             delete[] temporary_buffer;
         }
     }
-    void mantissa_to_floats(float* output_array, int precision = 4) {
+    void mantissa_to_floats(float* output_array) {
         if (block_columns) {
             int num_blocks_count = (cols + block_size - 1) / block_size;
             for (int row_index = 0; row_index < rows; ++row_index) {
                 for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
-                    int32_t exponent_val = exponents[row_index * num_blocks_count + block_index];
-                    float exponent_scale = std::ldexp(1.0f, exponent_val - precision);
+                    int block_flat_idx = row_index * num_blocks_count + block_index;
+                    int32_t exponent_val = exponents[block_flat_idx];
+                    float exponent_scale = std::ldexp(1.0f, exponent_val - precisions[block_flat_idx]);
                     int start_col = block_index * block_size;
                     int end_col = (start_col + block_size < cols) ? (start_col + block_size) : cols;
                     for (int col_index = start_col; col_index < end_col; ++col_index) {
@@ -305,8 +402,9 @@ struct FixedPointBlock {
             int num_blocks_count = (rows + block_size - 1) / block_size;
             for (int col_index = 0; col_index < cols; ++col_index) {
                 for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
-                    int32_t exponent_val = exponents[block_index * cols + col_index];
-                    float exponent_scale = std::ldexp(1.0f, exponent_val - precision);
+                    int block_flat_idx = block_index * cols + col_index;
+                    int32_t exponent_val = exponents[block_flat_idx];
+                    float exponent_scale = std::ldexp(1.0f, exponent_val - precisions[block_flat_idx]);
                     int start_row = block_index * block_size;
                     int end_row = (start_row + block_size < rows) ? (start_row + block_size) : rows;
                     for (int row_index = start_row; row_index < end_row; ++row_index) {
@@ -316,20 +414,82 @@ struct FixedPointBlock {
             }
         }
     }
-    void mantissa_to_floats_product(float* output_array, int precision = 4) {
-        int num_blocks_count = (cols + block_size - 1) / block_size;
-        for (int row_index = 0; row_index < rows; ++row_index) {
-            for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
-                int32_t exponent_val = exponents[row_index * num_blocks_count + block_index];
-                float exponent_scale = std::ldexp(1.0f, exponent_val - 2 * precision);
-                int start_col = block_index * block_size;
-                int end_col = (start_col + block_size < cols) ? (start_col + block_size) : cols;
-                for (int col_index = start_col; col_index < end_col; ++col_index) {
-                    output_array[row_index * cols + col_index] = (float)mantissa[row_index * cols + col_index] * exponent_scale;
+    void mantissa_to_floats_product(float* output_array, int other_exponent = 8) {
+        if (block_columns) {
+            int num_blocks_count = (cols + block_size - 1) / block_size;
+            for (int row_index = 0; row_index < rows; ++row_index) {
+                for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
+                    int block_flat_idx = row_index * num_blocks_count + block_index;
+                    int32_t exponent_val = exponents[block_flat_idx];
+                    float exponent_scale = std::ldexp(1.0f, exponent_val - precisions[block_flat_idx] - other_exponent);
+                    int start_col = block_index * block_size;
+                    int end_col = (start_col + block_size < cols) ? (start_col + block_size) : cols;
+                    for (int col_index = start_col; col_index < end_col; ++col_index) {
+                        output_array[row_index * cols + col_index] = (float)mantissa[row_index * cols + col_index] * exponent_scale;
+                    }
+                }
+            }
+        } else {
+            int num_blocks_count = (rows + block_size - 1) / block_size;
+            for (int col_index = 0; col_index < cols; ++col_index) {
+                for (int block_index = 0; block_index < num_blocks_count; ++block_index) {
+                    int block_flat_idx = block_index * cols + col_index;
+                    int32_t exponent_val = exponents[block_flat_idx];
+                    float exponent_scale = std::ldexp(1.0f, exponent_val - precisions[block_flat_idx] - other_exponent);
+                    int start_row = block_index * block_size;
+                    int end_row = (start_row + block_size < rows) ? (start_row + block_size) : rows;
+                    for (int row_index = start_row; row_index < end_row; ++row_index) {
+                        output_array[row_index * cols + col_index] = (float)mantissa[row_index * cols + col_index] * exponent_scale;
+                    }
                 }
             }
         }
     }
 };
+
+class PrefetchQueue {
+private:
+    std::queue<FixedPointBlock<int8_t>*> queue;
+    std::mutex mutex;
+public:
+    void push(FixedPointBlock<int8_t>* block) {
+        std::lock_guard<std::mutex> lock(mutex);
+        queue.push(block);
+    }
+    FixedPointBlock<int8_t>* pop() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (queue.empty()) return nullptr;
+        FixedPointBlock<int8_t>* block = queue.front();
+        queue.pop();
+        return block;
+    }
+    void clear_queue() {
+        std::lock_guard<std::mutex> lock(mutex);
+        while (!queue.empty()) {
+            delete queue.front();
+            queue.pop();
+        }
+    }
+};
+
+inline PrefetchQueue prefetch_queue;
+inline std::vector<std::future<void>> active_prefetch_futures;
+
+inline void prefetch_weights(const std::vector<const float*>& weight_ptrs, const std::vector<int>& next_sizes) {
+    for (size_t i = 0; i < weight_ptrs.size() && i < next_sizes.size(); ++i) {
+        const float* ptr = weight_ptrs[i];
+        int size = next_sizes[i];
+        active_prefetch_futures.push_back(std::async(std::launch::async, [ptr, size]() {
+            FixedPointBlock<int8_t>* block = new FixedPointBlock<int8_t>(size, size, size, false);
+            block->fit_exponent(ptr);
+            block->floats_to_mantissa(ptr, 0);
+            prefetch_queue.push(block);
+        }));
+    }
+}
+
+inline void clear_queue() {
+    prefetch_queue.clear_queue();
+    active_prefetch_futures.clear();
+}
 #endif
-END2763
