@@ -9,6 +9,15 @@
 #include <iostream>
 inline float global_weight_decay = 0.01f;
 inline float global_max_trust_ratio = 10.0f;
+// Per-slot scaling for the quadratic weight block of Quadratic layers.
+// The quadratic path (y = x*W_lin + x^2*W_quad) is |x| times more sensitive to
+// weight changes than the linear path (d y/d W_quad = x^2 vs d y/d W_lin = x),
+// so when |x| > 1 the same weight-space step moves the function more through
+// W_quad than through W_lin. Slightly reducing LR (and weight decay) for the
+// quadratic block only equalises the effective function-space step size.
+// Defaults to 1.0 (no scaling) so existing behaviour is unchanged unless set.
+inline float quad_lr_scale = 1.0f;
+inline float quad_wd_scale = 1.0f;
 inline float train_adams(std::vector<std::variant<Layer, ParametricLayer>> &layers_list, const std::vector<float> &training_data, const std::vector<int> &correct_indices, const std::vector<float> &required_output, float learning_rate, const LossFunc &loss_function, const LossDerivative &loss_derivative, int training_step, int batch_count, std::vector<int> &sequence_lengths)
 {
 	int total_rows = 0;
@@ -130,7 +139,12 @@ inline float train_adams(std::vector<std::variant<Layer, ParametricLayer>> &laye
 				float second_bias_correction = second_moment_buffer[moment_offset + weight_index] / (1.0f - second_moment_decay_power);
 				float adam_step_value = first_bias_correction / (std::sqrt(second_bias_correction) + 1e-8f);
 				float weight_value = layer_pointer->weights_begin[weight_index];
-				layer_pointer->weights_begin[weight_index] -= scaled_learning_rate * (adam_step_value + global_weight_decay * weight_value);
+				// Weights are laid out [W_quad: input*output][W_lin: input*output][bias: output];
+				// the quadratic block is the first input*output weights. Apply the
+				// per-slot LR/decay scales there and leave the rest unchanged.
+				float update_scale = (weight_index < (int)(layer_pointer->input * layer_pointer->output)) ? quad_lr_scale : 1.0f;
+				float decay_scale = (weight_index < (int)(layer_pointer->input * layer_pointer->output)) ? quad_wd_scale : 1.0f;
+				layer_pointer->weights_begin[weight_index] -= scaled_learning_rate * update_scale * (adam_step_value + global_weight_decay * decay_scale * weight_value);
 			}
 			moment_offset += layer_pointer->size;
 			for (int weight_index = 0; weight_index < layer_pointer->extra_weights_size; ++weight_index)

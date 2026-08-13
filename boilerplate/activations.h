@@ -67,7 +67,10 @@ HookDerivative NonLearnableLayerNormDerivative = [](LayerRef layer, int batch_co
 		int sequence_rows = sequence_lengths[batch_index];
 		for (int row_index = 0; row_index < sequence_rows; ++row_index)
 		{
-			float *raw_input_sample = original_inputs + current_offset;
+			// The forward hooks normalize preactivation_values (the saved pre-activation),
+			// so the derivative must recompute the statistics from the same values.
+			// (original_inputs is the layer's raw input and is NOT what was normalized.)
+			float *raw_input_sample = preactivation_values + current_offset;
 			float *upstream_sample = upstream_gradient + current_offset;
 			float *output_gradient_sample = output_gradient + current_offset;
 			float mean_value = 0.0f;
@@ -152,7 +155,10 @@ HookDerivative LearnableLayerNormDerivativeImpl = [](LayerRef layer, int batch_c
 		int sequence_rows = sequence_lengths[batch_index];
 		for (int row_index = 0; row_index < sequence_rows; ++row_index)
 		{
-			float *raw_input_sample = original_inputs + current_offset;
+			// The forward hooks normalize preactivation_values (the saved pre-activation),
+			// so the derivative must recompute the statistics from the same values.
+			// (original_inputs is the layer's raw input and is NOT what was normalized.)
+			float *raw_input_sample = preactivation_values + current_offset;
 			float *upstream_sample = upstream_gradient + current_offset;
 			float *output_gradient_sample = output_gradient + current_offset;
 			float mean_value = 0.0f;
@@ -180,10 +186,14 @@ HookDerivative LearnableLayerNormDerivativeImpl = [](LayerRef layer, int batch_c
 			for (int feature_index = 0; feature_index < feature_count; ++feature_index)
 			{
 				float normalized_input = (raw_input_sample[feature_index] - mean_value) * inverse_standard_deviation;
-				float input_gradients = (gamma_parameters[feature_index] * upstream_sample[feature_index] - sum_gamma_upstream * inverse_feature_count - normalized_input * sum_gamma_upstream_normalized * inverse_feature_count) * inverse_standard_deviation;
+				// upstream_gradient and output_gradient can alias (Layer::backward passes
+				// output_buffers.first for both), so capture the true upstream value
+				// before output_gradient_sample overwrites it in-place.
+				float true_upstream = upstream_sample[feature_index];
+				float input_gradients = (gamma_parameters[feature_index] * true_upstream - sum_gamma_upstream * inverse_feature_count - normalized_input * sum_gamma_upstream_normalized * inverse_feature_count) * inverse_standard_deviation;
 				output_gradient_sample[feature_index] = input_gradients;
-				gamma_gradients[feature_index] += upstream_sample[feature_index] * normalized_input;
-				beta_gradients[feature_index] += upstream_sample[feature_index];
+				gamma_gradients[feature_index] += true_upstream * normalized_input;
+				beta_gradients[feature_index] += true_upstream;
 			}
 			current_offset += feature_count;
 		}
@@ -224,7 +234,10 @@ HookDerivative RMSNormDerivativeImpl = [](LayerRef layer, int batch_count, std::
 		int sequence_rows = sequence_lengths[batch_index];
 		for (int row_index = 0; row_index < sequence_rows; ++row_index)
 		{
-			float *raw_input_sample = original_inputs + current_offset;
+			// The forward hooks normalize preactivation_values (the saved pre-activation),
+			// so the derivative must recompute the statistics from the same values.
+			// (original_inputs is the layer's raw input and is NOT what was normalized.)
+			float *raw_input_sample = preactivation_values + current_offset;
 			float *upstream_sample = upstream_gradient + current_offset;
 			float *output_gradient_sample = output_gradient + current_offset;
 			float sum_squares = 0.0f;
@@ -239,9 +252,13 @@ HookDerivative RMSNormDerivativeImpl = [](LayerRef layer, int batch_count, std::
 			float inverse_feature_count = 1.0f / feature_count;
 			for (int feature_index = 0; feature_index < feature_count; ++feature_index)
 			{
-				float input_gradients = gamma_parameters[feature_index] * upstream_sample[feature_index] * inverse_rms - raw_input_sample[feature_index] * sum_gamma_upstream_x * inverse_rms_cubed * inverse_feature_count;
+				// upstream_gradient and output_gradient can alias (Layer::backward passes
+				// output_buffers.first for both), so capture the true upstream value
+				// before output_gradient_sample overwrites it in-place.
+				float true_upstream = upstream_sample[feature_index];
+				float input_gradients = gamma_parameters[feature_index] * true_upstream * inverse_rms - raw_input_sample[feature_index] * sum_gamma_upstream_x * inverse_rms_cubed * inverse_feature_count;
 				output_gradient_sample[feature_index] = input_gradients;
-				gamma_gradients[feature_index] += upstream_sample[feature_index] * raw_input_sample[feature_index] * inverse_rms;
+				gamma_gradients[feature_index] += true_upstream * raw_input_sample[feature_index] * inverse_rms;
 			}
 			current_offset += feature_count;
 		}
@@ -499,6 +516,9 @@ HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>
 	float *attention_scores = value_buffer + maximum_sequence_length * embedding_dimension;
 	float *stored_lengths = attention_scores + maximum_sequence_length * maximum_sequence_length;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
+	// The rest of the network stores sequences COMPACTED (packed back-to-back by
+	// their ACTUAL lengths), so attention must process exactly actual_length rows
+	// per sequence and advance offsets by actual_length * embedding_dimension.
 	int current_offset = 0;
 	for (int sequence_index = 0; sequence_index < batch_count; ++sequence_index)
 	{
@@ -506,54 +526,41 @@ HookFunc AttentionForward = [](LayerRef layer, int batch_count, std::vector<int>
 		stored_lengths[sequence_index] = static_cast<float>(actual_length);
 		float *sequence_input = preactivation_values + current_offset;
 		float *sequence_output = output_values + current_offset;
-		matmult(sequence_input, query_weights, query_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(sequence_input, key_weights, key_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(sequence_input, value_weights, value_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(query_buffer, key_buffer, attention_scores, maximum_sequence_length, embedding_dimension, maximum_sequence_length, false, true, inverse_sqrt_dimension, 0.0f);
-		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
+		matmult(sequence_input, query_weights, query_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, key_weights, key_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, value_weights, value_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(query_buffer, key_buffer, attention_scores, actual_length, embedding_dimension, actual_length, false, true, inverse_sqrt_dimension, 0.0f);
+		// Causal mask: token i may attend only to columns <= i.
+		for (int row_index = 0; row_index < actual_length; ++row_index)
 		{
-			for (int col_index = row_index + 1; col_index < maximum_sequence_length; ++col_index)
+			for (int col_index = row_index + 1; col_index < actual_length; ++col_index)
 			{
-				attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
+				attention_scores[row_index * actual_length + col_index] = -1e30f;
 			}
 		}
-		if (actual_length < maximum_sequence_length)
+		// Compacted storage has no padded positions, so no extra sequence-length
+		// mask is needed beyond the causal mask: the padded rows/columns that the
+		// previous implementation masked to -1e30 no longer exist in the buffer.
+		for (int row_index = 0; row_index < actual_length; ++row_index)
 		{
-			for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
+			float row_maximum = attention_scores[row_index * actual_length];
+			for (int col_index = 1; col_index < actual_length; ++col_index)
 			{
-				for (int col_index = actual_length; col_index < maximum_sequence_length; ++col_index)
-				{
-					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
-				}
-			}
-			for (int row_index = actual_length; row_index < maximum_sequence_length; ++row_index)
-			{
-				for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
-				{
-					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
-				}
-			}
-		}
-		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
-		{
-			float row_maximum = attention_scores[row_index * maximum_sequence_length];
-			for (int col_index = 1; col_index < maximum_sequence_length; ++col_index)
-			{
-				if (attention_scores[row_index * maximum_sequence_length + col_index] > row_maximum)
-					row_maximum = attention_scores[row_index * maximum_sequence_length + col_index];
+				if (attention_scores[row_index * actual_length + col_index] > row_maximum)
+					row_maximum = attention_scores[row_index * actual_length + col_index];
 			}
 			float row_exponential_sum = 0.0f;
-			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
+			for (int col_index = 0; col_index < actual_length; ++col_index)
 			{
-				row_exponential_sum += std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum);
+				row_exponential_sum += std::exp(attention_scores[row_index * actual_length + col_index] - row_maximum);
 			}
-			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
+			for (int col_index = 0; col_index < actual_length; ++col_index)
 			{
-				attention_scores[row_index * maximum_sequence_length + col_index] = std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum) / row_exponential_sum;
+				attention_scores[row_index * actual_length + col_index] = std::exp(attention_scores[row_index * actual_length + col_index] - row_maximum) / row_exponential_sum;
 			}
 		}
-		matmult(attention_scores, value_buffer, sequence_output, maximum_sequence_length, maximum_sequence_length, embedding_dimension, false, false, 1.0f, 0.0f);
-		current_offset += maximum_sequence_length * embedding_dimension;
+		matmult(attention_scores, value_buffer, sequence_output, actual_length, actual_length, embedding_dimension, false, false, 1.0f, 0.0f);
+		current_offset += actual_length * embedding_dimension;
 		sequence_lengths[sequence_index] = actual_length;
 	}
 };
@@ -572,10 +579,16 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::ve
 	float *key_buffer = query_buffer + maximum_sequence_length * embedding_dimension;
 	float *temporary_buffer = key_buffer + maximum_sequence_length * embedding_dimension;
 	float *attention_scores = temporary_buffer + maximum_sequence_length * embedding_dimension;
-	float *score_gradients = attention_scores + maximum_sequence_length * maximum_sequence_length;
-	float *stored_lengths = score_gradients + maximum_sequence_length * maximum_sequence_length;
-	float *full_upstream_sample = stored_lengths + batch_count;
+	// stored_lengths must live at the SAME offset AttentionForward writes it
+	// (attention_scores + max_seq*max_seq), so the derivative can read back the
+	// original sequence lengths that the forward pass stored.
+	float *stored_lengths = attention_scores + maximum_sequence_length * maximum_sequence_length;
+	float *score_gradients = stored_lengths + batch_count;
+	float *full_upstream_sample = score_gradients + maximum_sequence_length * maximum_sequence_length;
 	float inverse_sqrt_dimension = 1.0f / std::sqrt(static_cast<float>(embedding_dimension));
+	// Same compacted layout as AttentionForward (and the rest of the network):
+	// sequences are packed by their ACTUAL lengths, so the input, the output
+	// gradient and the upstream gradient all advance by actual_length * emb.
 	int current_offset = 0;
 	int upstream_offset = 0;
 	for (int sequence_index = 0; sequence_index < batch_count; ++sequence_index)
@@ -593,76 +606,68 @@ HookDerivative AttentionDerivative = [](LayerRef layer, int batch_count, std::ve
 				full_upstream_sample[row_index * embedding_dimension + col_index] = sequence_upstream_reduced[row_index * embedding_dimension + col_index];
 			}
 		}
-		matmult(sequence_input, query_weights, query_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(sequence_input, key_weights, key_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(sequence_input, value_weights, temporary_buffer, maximum_sequence_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
-		matmult(query_buffer, key_buffer, attention_scores, maximum_sequence_length, embedding_dimension, maximum_sequence_length, false, true, inverse_sqrt_dimension, 0.0f);
-		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
+		matmult(sequence_input, query_weights, query_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, key_weights, key_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(sequence_input, value_weights, temporary_buffer, actual_length, embedding_dimension, embedding_dimension, false, false, 1.0f, 0.0f);
+		matmult(query_buffer, key_buffer, attention_scores, actual_length, embedding_dimension, actual_length, false, true, inverse_sqrt_dimension, 0.0f);
+		// Causal mask: token i may attend only to columns <= i.
+		for (int row_index = 0; row_index < actual_length; ++row_index)
 		{
-			for (int col_index = row_index + 1; col_index < maximum_sequence_length; ++col_index)
+			for (int col_index = row_index + 1; col_index < actual_length; ++col_index)
 			{
-				attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
+				attention_scores[row_index * actual_length + col_index] = -1e30f;
 			}
 		}
-		if (actual_length < maximum_sequence_length)
+		for (int row_index = 0; row_index < actual_length; ++row_index)
 		{
-			for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
+			float row_maximum = attention_scores[row_index * actual_length];
+			for (int col_index = 1; col_index < actual_length; ++col_index)
 			{
-				for (int col_index = actual_length; col_index < maximum_sequence_length; ++col_index)
-				{
-					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
-				}
-			}
-			for (int row_index = actual_length; row_index < maximum_sequence_length; ++row_index)
-			{
-				for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
-				{
-					attention_scores[row_index * maximum_sequence_length + col_index] = -1e30f;
-				}
-			}
-		}
-		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
-		{
-			float row_maximum = attention_scores[row_index * maximum_sequence_length];
-			for (int col_index = 1; col_index < maximum_sequence_length; ++col_index)
-			{
-				if (attention_scores[row_index * maximum_sequence_length + col_index] > row_maximum)
-					row_maximum = attention_scores[row_index * maximum_sequence_length + col_index];
+				if (attention_scores[row_index * actual_length + col_index] > row_maximum)
+					row_maximum = attention_scores[row_index * actual_length + col_index];
 			}
 			float row_exponential_sum = 0.0f;
-			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
+			for (int col_index = 0; col_index < actual_length; ++col_index)
 			{
-				row_exponential_sum += std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum);
+				row_exponential_sum += std::exp(attention_scores[row_index * actual_length + col_index] - row_maximum);
 			}
-			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
+			for (int col_index = 0; col_index < actual_length; ++col_index)
 			{
-				attention_scores[row_index * maximum_sequence_length + col_index] = std::exp(attention_scores[row_index * maximum_sequence_length + col_index] - row_maximum) / row_exponential_sum;
+				attention_scores[row_index * actual_length + col_index] = std::exp(attention_scores[row_index * actual_length + col_index] - row_maximum) / row_exponential_sum;
 			}
 		}
-		matmult(full_upstream_sample, temporary_buffer, score_gradients, maximum_sequence_length, embedding_dimension, maximum_sequence_length, false, true, 1.0f, 0.0f);
-		for (int row_index = 0; row_index < maximum_sequence_length; ++row_index)
+		matmult(full_upstream_sample, temporary_buffer, score_gradients, actual_length, embedding_dimension, actual_length, false, true, 1.0f, 0.0f);
+		for (int row_index = 0; row_index < actual_length; ++row_index)
 		{
 			float weighted_sum = 0.0f;
-			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
-				weighted_sum += score_gradients[row_index * maximum_sequence_length + col_index] * attention_scores[row_index * maximum_sequence_length + col_index];
-			for (int col_index = 0; col_index < maximum_sequence_length; ++col_index)
-				score_gradients[row_index * maximum_sequence_length + col_index] = attention_scores[row_index * maximum_sequence_length + col_index] * (score_gradients[row_index * maximum_sequence_length + col_index] - weighted_sum);
+			for (int col_index = 0; col_index < actual_length; ++col_index)
+				weighted_sum += score_gradients[row_index * actual_length + col_index] * attention_scores[row_index * actual_length + col_index];
+			for (int col_index = 0; col_index < actual_length; ++col_index)
+				score_gradients[row_index * actual_length + col_index] = attention_scores[row_index * actual_length + col_index] * (score_gradients[row_index * actual_length + col_index] - weighted_sum);
 		}
-		float *value_gradient = temporary_buffer;
-		matmult(attention_scores, full_upstream_sample, value_gradient, maximum_sequence_length, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 0.0f);
 		float *weight_gradients_pointer = parametric_layer->weight_gradients;
-		matmult(sequence_input, value_gradient, weight_gradients_pointer + 2 * embedding_dimension * embedding_dimension, embedding_dimension, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 1.0f);
+		// Q_grad, K_grad and V_grad must all survive until the input-gradient sum
+		// dL/dx = Q_grad*Wq^T + K_grad*Wk^T + V_grad*Wv^T is formed. They share the
+		// single temporary_buffer, so each gradient is computed and FULLY consumed
+		// (input-gradient term plus weight gradient) before the buffer is reused for
+		// the next one. That keeps the three gradients distinct with no extra scratch.
+		// 1) V branch
+		float *value_gradient = temporary_buffer;
+		matmult(attention_scores, full_upstream_sample, value_gradient, actual_length, actual_length, embedding_dimension, true, false, 1.0f, 0.0f);
+		matmult(value_gradient, value_weights, sequence_output_gradient, actual_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
+		matmult(sequence_input, value_gradient, weight_gradients_pointer + 2 * embedding_dimension * embedding_dimension, embedding_dimension, actual_length, embedding_dimension, true, false, 1.0f, 1.0f);
+		// 2) Q branch
 		float *query_gradient = temporary_buffer;
-		matmult(score_gradients, key_buffer, query_gradient, maximum_sequence_length, maximum_sequence_length, embedding_dimension, false, false, inverse_sqrt_dimension, 0.0f);
-		matmult(sequence_input, query_gradient, weight_gradients_pointer, embedding_dimension, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 1.0f);
+		matmult(score_gradients, key_buffer, query_gradient, actual_length, actual_length, embedding_dimension, false, false, inverse_sqrt_dimension, 0.0f);
+		matmult(query_gradient, query_weights, sequence_output_gradient, actual_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		matmult(sequence_input, query_gradient, weight_gradients_pointer, embedding_dimension, actual_length, embedding_dimension, true, false, 1.0f, 1.0f);
+		// 3) K branch
 		float *key_gradient = temporary_buffer;
-		matmult(score_gradients, query_buffer, key_gradient, maximum_sequence_length, maximum_sequence_length, embedding_dimension, true, false, inverse_sqrt_dimension, 0.0f);
-		matmult(sequence_input, key_gradient, weight_gradients_pointer + embedding_dimension * embedding_dimension, embedding_dimension, maximum_sequence_length, embedding_dimension, true, false, 1.0f, 1.0f);
-		matmult(query_gradient, query_weights, sequence_output_gradient, maximum_sequence_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 0.0f);
-		matmult(key_gradient, key_weights, sequence_output_gradient, maximum_sequence_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
-		matmult(value_gradient, value_weights, sequence_output_gradient, maximum_sequence_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		matmult(score_gradients, query_buffer, key_gradient, actual_length, actual_length, embedding_dimension, true, false, inverse_sqrt_dimension, 0.0f);
+		matmult(key_gradient, key_weights, sequence_output_gradient, actual_length, embedding_dimension, embedding_dimension, false, true, 1.0f, 1.0f);
+		matmult(sequence_input, key_gradient, weight_gradients_pointer + embedding_dimension * embedding_dimension, embedding_dimension, actual_length, embedding_dimension, true, false, 1.0f, 1.0f);
 		sequence_lengths[sequence_index] = original_length;
-		current_offset += maximum_sequence_length * embedding_dimension;
+		current_offset += actual_length * embedding_dimension;
 		upstream_offset += actual_length * embedding_dimension;
 	}
 };

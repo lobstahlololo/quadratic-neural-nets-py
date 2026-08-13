@@ -51,6 +51,14 @@ int main()
     float learning_rate = 0.001f;
     float min_learning_rate = 0.00001f;
 
+    // Quadratic weights are |x| times more sensitive than linear weights in
+    // function space (d y/d W_quad = x^2 vs d y/d W_lin = x), so a slightly
+    // reduced LR/weight-decay on the quadratic block equalises the effective
+    // step size and improves stability (see train_functions.h). Linear weights,
+    // biases, gamma/beta and the embedding keep the default 1.0 scaling.
+    quad_lr_scale = 0.7f;
+    quad_wd_scale = 0.7f;
+
     batch_size = 8;
 
     std::string full_text;
@@ -247,8 +255,8 @@ int main()
             FeedForwardLayer(
                 feedforward_dimension,
                 embedding_dimension,
-                {},
-                {}));
+                std::vector<HookFunc>{},
+                std::vector<HookDerivative>{}));
     }
 
     LayerArgs final_norm;
@@ -280,7 +288,10 @@ int main()
     setupNeuralNetwork(
         architecture,
         "",
-        xavier_initialisation);
+        xavier_initialisation,
+        // Buffers must hold batch_size x sequence_length rows per training step
+        // (total_rows = 8 sequences x 128 tokens = 1024).
+        maximum_sequence_length);
 
     int parameter_count = 0;
 
@@ -330,7 +341,9 @@ int main()
         CrossEntropyLossForSoftmaxDerivative,
         epochs,
         batch_size,
-        sequence_lengths);
+        // One batch is batch_size sequences of maximum_sequence_length tokens;
+        // trainScheduler slices training_data into batches of these sizes.
+        std::vector<int>(batch_size, maximum_sequence_length));
 
     save_weights(
         "transformer_weights.bin");

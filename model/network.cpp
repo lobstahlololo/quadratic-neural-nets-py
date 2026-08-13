@@ -97,6 +97,11 @@ float *ParametricLayer::forward(float *inputs, int batch_count, std::vector<int>
 		total_rows += s;
 #ifdef TRAINING_ON
 	previous_preactivations = output_buffers.first.data();
+	// Layer 0 (embedding): point previous_inputs at this call's token-id
+	// inputs so the derivative can read them (that is the channel backward
+	// passes to hooks). Refreshed every forward so each step uses its own batch.
+	if (previous_inputs_from_forward)
+		previous_inputs = inputs;
 #endif
 	if (forward_hooks.empty())
 	{
@@ -116,7 +121,10 @@ float *ParametricLayer::forward(float *inputs, int batch_count, std::vector<int>
 	}
 // std::cout << "Max post-activation: " << max << "\n";
 #ifdef TRAINING_ON
-	std::copy(output_buffers.first.data(), output_buffers.first.data() + input * total_rows, output_pointer);
+	// Persist the layer's full OUTPUT (output * total_rows) so the next layer's
+	// backward reads complete activations. For the embedding (input=1, output=128)
+	// this saves all 128 values per token instead of only 1 per token.
+	std::copy(output_buffers.first.data(), output_buffers.first.data() + output * total_rows, output_pointer);
 #endif
 	return output_buffers.first.data();
 }
@@ -126,6 +134,12 @@ float *Layer::backward(float *upstream_gradient, int batch_count, std::vector<in
 	int total_rows = 0;
 	for (int s : sequence_lengths)
 		total_rows += s;
+	// Derivative hooks (LayerNorm/RMSNorm) accumulate gamma/beta gradients into
+	// extra_weight_gradients with +=, so reset them at the START of each backward
+	// pass: this happens before the hooks run, so each training step's gradients
+	// start from zero just like weight_gradients below.
+	if (extra_weights_size > 0)
+		std::fill(extra_weight_gradients, extra_weight_gradients + extra_weights_size, 0.0f);
 	float *post_activation_gradient = upstream_gradient;
 	if (!forward_hook_derivatives.empty())
 	{
@@ -151,8 +165,21 @@ float *Layer::backward(float *upstream_gradient, int batch_count, std::vector<in
 		}
 	}
 	float *scratch_data = output_buffers.second.data();
-	matmult(post_activation_gradient, previous_inputs, weight_gradients, output, total_rows, input, true, false, 1.0f, 1.0f);
-	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients + input * output, output, total_rows, input, true, false, 1.0f, 1.0f);
+	// The shared squared_inputs_buffer holds THIS layer's x^2 only until a later
+	// layer's backward runs: backward traverses layers last->first, and each
+	// layer's backward reuses that buffer for its own input-gradient computation
+	// (W_lin^T * g below). Recompute x^2 from the persistent previous_inputs so
+	// every dense layer's W_quad gradient uses its OWN forward input.
+	for (size_t i = 0; i < input * total_rows; ++i)
+	{
+		squared_inputs_buffer[i] = previous_inputs[i] * previous_inputs[i];
+	}
+	// Weight layout is [W_quad: input*output][W_lin: input*output][bias: output], and
+	// forward computes preactivation = x * W_lin + x^2 * W_quad. The gradients must
+	// therefore land in the matching slots: dL/dW_quad = g * x^2 in slot 0, and
+	// dL/dW_lin = g * x in slot input*output. (Previously these two were swapped.)
+	matmult(post_activation_gradient, squared_inputs_buffer.data(), weight_gradients, output, total_rows, input, true, false, 1.0f, 1.0f);
+	matmult(post_activation_gradient, previous_inputs, weight_gradients + input * output, output, total_rows, input, true, false, 1.0f, 1.0f);
 	matmult(post_activation_gradient, linear(), squared_inputs_buffer.data(), total_rows, output, input, false, false, 1.0f, 0.0f);
 	matmult(post_activation_gradient, quadratic(), scratch_data, total_rows, output, input, false, false, 1.0f, 0.0f);
 	for (size_t i = 0; i < input * total_rows; ++i)
@@ -202,6 +229,13 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 		{
 			layer_sizes.push_back(args.layer_size);
 			prev = &args;
+			// The first parametric layer (embedding) consumes one token id per row,
+			// so its input dimension is 1: it contributes weights_per_input weights.
+			// (Layer-0 extra_weights are accounted for by the block below.)
+			if (args.kind == Parametric)
+			{
+				network_size += args.weights_per_input;
+			}
 			continue;
 		}
 		if (args.kind == Parametric)
@@ -295,7 +329,8 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			for (auto &hd : layersAdd[i].hook_gradients)
 				layer.forward_hook_derivatives.push_back(hd);
 			layer.extra_args = layersAdd[i].extra_args;
-			layer.input = (i == 0) ? layersAdd[i].layer_size : layersAdd[i - 1].layer_size;
+			// The first layer is the embedding: it reads one token id (1 float) per row.
+			layer.input = (i == 0) ? 1 : layersAdd[i - 1].layer_size;
 			layer.output = layersAdd[i].layer_size;
 			layer.weights_per_input = layersAdd[i].weights_per_input;
 			layer.weights_begin = (i == 0) ? weight_start : weight_start + accumulated_weights;
@@ -318,12 +353,17 @@ void setupNeuralNetwork(std::vector<LayerArgs> layersAdd, std::string weights_pa
 			else
 			{
 				layer.previous_inputs = nullptr;
+				// The embedding (layer 0) has no preceding saved-output region;
+				// forward() will store the raw token-id inputs here every call.
+				layer.previous_inputs_from_forward = true;
 			}
 #endif
 			layers.push_back(layer);
 			previous_output_offset += output_data_size;
 			size_t param_size = layer.input * layer.weights_per_input + layer.extra_weights_size;
-			if (i > 0 || layer.extra_weights_size > 0)
+			// Layer 0 (the embedding) owns weights in the shared arrays too, so it must
+			// advance the weight/gradient offsets as well.
+			if (i > 0 || layer.extra_weights_size > 0 || param_size > 0)
 			{
 				gradient_offset += param_size;
 				accumulated_weights += param_size;

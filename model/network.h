@@ -61,6 +61,9 @@ struct ParametricLayer {
 	float* weight_gradients = nullptr;
 	float* extra_weight_gradients = nullptr;
 	float* output_pointer = nullptr;
+	// Layer 0 (the embedding) has no preceding layer to save its inputs, so
+	// forward() stores the raw forward-call inputs (token ids) here instead.
+	bool previous_inputs_from_forward = false;
 	float* backward(float* upstream_gradient, int batch_count, std::vector<int>& sequence_lengths, const std::vector<int>& correct_indices);
 	#endif
 };

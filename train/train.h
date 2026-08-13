@@ -10,6 +10,12 @@ extern TrainHook trainHook;
 extern std::vector<float> first_moment_buffer;
 extern std::vector<float> second_moment_buffer;
 
+// Per-slot LR/weight-decay scales applied to the quadratic weight block of
+// Quadratic layers in train_adams (defined in boilerplate/train_functions.h).
+// Default 1.0 = no scaling.
+extern float quad_lr_scale;
+extern float quad_wd_scale;
+
 typedef float (*LossFunc)(const float* predicted,
 		const float* required,
 		const std::vector<int>& required_indices,
