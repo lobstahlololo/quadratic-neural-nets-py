@@ -110,6 +110,67 @@ class Transformer(nn.Module):
     emb=128, ff=512, 4 blocks, 4 sequential single-head attentions per block.
     """
 
+    def forward_packed(self, tokens, lengths):
+        """Run the exact C++ forward path on a padded (B, L) token grid with a
+        validity mask, returning logits on the padded grid.
+
+        ``tokens``: int64 (B, L) padded grid; ``lengths``: sequence lengths.
+        Rows >= lengths[s] are padded and masked out of attention (softmax
+        over exactly the valid key columns, like the C++ compacted layout).
+        The padded positions in the returned logits are meaningless; extract
+        valid rows with the mask when comparing to C++ packed output.
+
+        Uses the Stage-9 validated padded/masked attention (see
+        compare_varseq.build_forward_padded) without touching ``forward()``.
+        """
+        B, L = tokens.shape
+        lens = torch.as_tensor(lengths, dtype=torch.long, device=tokens.device)
+        mask = torch.arange(L, device=tokens.device)[None, :] < lens[:, None]  # (B, L)
+        out = {}
+        h = self.embedding(tokens)
+        out["embedding"] = h
+        for bi, block in enumerate(self.blocks):
+            d = block.norm1.dense(h)
+            out[f"block{bi+1}_norm1_dense"] = d
+            h = block.norm1.ln(d)
+            out[f"block{bi+1}_norm1"] = h
+            for hi, head in enumerate(block.attention):
+                q = h @ head.Wq
+                k = h @ head.Wk
+                v = h @ head.Wv
+                out[f"block{bi+1}_head{hi+1}_q"] = q
+                out[f"block{bi+1}_head{hi+1}_k"] = k
+                out[f"block{bi+1}_head{hi+1}_v"] = v
+                scores = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(head.dim))
+                causal = torch.triu(torch.ones(L, L, device=h.device), diagonal=1).bool()
+                scores = scores.masked_fill(causal, -1e30)
+                scores = scores.masked_fill((~mask).unsqueeze(1), -1e30)  # padded keys
+                attn = torch.softmax(scores, dim=-1)
+                out[f"block{bi+1}_head{hi+1}_scores"] = attn
+                h = attn @ v
+                out[f"block{bi+1}_head{hi+1}_out"] = h
+            d = block.norm2.dense(h)
+            out[f"block{bi+1}_norm2_dense"] = d
+            h = block.norm2.ln(d)
+            out[f"block{bi+1}_norm2"] = h
+            d = block.ff1(h)
+            out[f"block{bi+1}_ff1_dense"] = d
+            h = torch.relu(d)
+            out[f"block{bi+1}_ff1_relu"] = h
+            h = block.ff2(h)
+            out[f"block{bi+1}_ff2"] = h
+        d = self.final_norm.dense(h)
+        out["final_norm_dense"] = d
+        h = self.final_norm.ln(d)
+        out["final_norm"] = h
+        out["logits"] = self.output(h)
+        out["probs"] = torch.softmax(out["logits"], dim=-1)
+        return out, mask
+
+    def forward(self, x):
+        """Return logits (the C++ output layer applies softmax only as a hook)."""
+        return self.forward_debug(x)["logits"]
+
     def __init__(
         self,
         vocabulary_size,
@@ -192,7 +253,9 @@ class Transformer(nn.Module):
 
         def u_(param, bound):
             with torch.no_grad():
-                param.uniform_(-bound, bound)
+                # use the seeded local generator, NOT the global RNG, so the
+                # seed argument fully determines the initialization
+                param.uniform_(-bound, bound, generator=g)
 
         # embedding: in = 1, out = emb
         b = math.sqrt(6.0 / (1 + self.embedding_dimension))
@@ -219,7 +282,7 @@ class Transformer(nn.Module):
                 u_(head.Wk, base)
                 u_(head.Wv, base)
             init_norm(block.norm2, self.embedding_dimension)
-            init_quad(block.ff1, self.embedding_dimension, 512)
-            init_quad(block.ff2, 512, self.embedding_dimension)
+            init_quad(block.ff1, self.embedding_dimension, block.ff1.out_features)
+            init_quad(block.ff2, block.ff2.in_features, self.embedding_dimension)
         init_norm(self.final_norm, self.embedding_dimension)
         init_quad(self.output, self.embedding_dimension, self.output.out_features)
