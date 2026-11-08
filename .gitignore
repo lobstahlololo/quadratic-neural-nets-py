@@ -13,3 +13,5 @@ python/ref_multibatch/
 
 python/.venv/
 python/runs/
+
+data/
