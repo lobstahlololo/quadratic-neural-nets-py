@@ -68,6 +68,117 @@ While two linear layers with a non-linear function can *approximate* a quadratic
 
 4. Finally, the backprop is just more complex. So it's harder to write.
 
+## Experiment 001 - TinyStories baseline (verified)
+
+One bounded run of the existing research harness (`python/research`), using the
+frozen architecture in `python/model.py`, the existing `Trainer`, optimizer,
+scheduler, streaming data pipeline and character tokenizer unchanged. No
+hyperparameter was tuned. This is a test of whether the current quadratic
+transformer learns anything measurable on TinyStories, not a benchmark.
+
+Numbers below are **measured**; the short interpretation notes say what I read
+into them.
+
+### Configuration (**measured**)
+
+| quantity | value |
+| --- | --- |
+| parameters | 2,229,491 |
+| architecture | `Embedding(243,128)` -> 4 blocks of [`QuadNorm` -> 4 sequential single-head attentions -> `QuadNorm` -> `QuadraticLinear(128->512)` -> ReLU -> `QuadraticLinear(512->128)`] -> `QuadNorm` -> `QuadraticLinear(128->243)`; no residual connections, no positional embeddings |
+| data | `data/TinyStories/tinystories-train.txt` (1.92 GB) train, `data/TinyStories/tinystories-valid.txt` (19.4 MB) validation |
+| tokenizer | existing character-level tokenizer, built from the train split, **243 tokens** |
+| context / batch / window stride | 64 / 8 / 32 |
+| optimizer | AdamW, lr 0.001, min_lr 1e-5, weight decay 0.01, `W_quad` scale 0.7 (`lr_eff = lr/batch_size = 0.000125`) |
+| scheduler | existing per-epoch cosine over `steps_per_epoch = 7,510,808` (unchanged) |
+| training budget | **500 optimizer steps** = `epochs=1` with `max_steps_per_epoch=500`, i.e. **0.0067% of one epoch** (256,000 tokens); one full epoch was never run |
+| validation subset | 256 fixed batches = 131,072 tokens, identical before and after training |
+| hardware | CPU only (no CUDA available), PyTorch 2.13.0, Python 3.14.7, Windows |
+
+### Results (**measured**)
+
+| metric | before training | after 500 steps |
+| --- | --- | --- |
+| validation cross entropy | 5.493916 | 3.198449 |
+| validation perplexity | 243.208 | 24.495 |
+| training loss | - (fresh init is uniform over the vocab, ~ln 243 = 5.49) | 3.196237 (mean of last 50 steps) / 3.248941 (step 500) |
+
+- validation improvement: **-2.295467 (-41.78%)**, so yes, this run learned
+  something measurable that transfers to held-out text.
+- training loss fell steadily (with step-to-step noise): 5.386 at step
+  10, 4.833 at 100, 4.145 at 200, 3.598 at 300, 3.397 at 400, 3.249 at 500.
+  The learning rate stayed at ~0.001 (only 0.0067% of the cosine schedule).
+- runtime: 202.7 s for the 500 steps plus end-of-epoch validation and the two
+  checkpoint writes -> **2.47 steps/s, 1,263 tokens/s** on CPU. A further 338 s
+  went to one-time preprocessing (tokenizer build over 1.92 GB + one token-count
+  pass) and is excluded from throughput.
+- checkpoint `checkpoint_final.pt` (`global_step = 500`) reloads into a fresh
+  model and reproduces the final validation loss exactly (3.198449).
+
+### Generation (measured output, interpretation in the notes)
+
+Settings: temperature 0.8, `max_new_tokens=128`, no top-k/top-p, context 64,
+5 seeds (1234-1238) plus one greedy sample (temperature 0). Prompts included
+`Once upon a time, there was a little girl named Lily.`, `The sun was shining
+and the bird said`, and `In a small house near the forest, a cat sat on a mat.`
+
+Example output (temperature 0.8):
+
+```
+Once upon a time, there was a little girl named Lily. oredinld n 'htuhwcse−sen  nirah🌹akat td eleeks"dCpla童ow  il rsewao eywo  odmli
+  eltorer h edtly  tsils tn yarisreth oowehk cso
+```
+
+All 6 samples had finite logits and token IDs inside [0, 243): no NaNs or
+invalid indices.
+
+**Interpretation:** the output is currently incoherent character-level text,
+not stories and not words. The model has picked up whitespace, punctuation,
+letter frequencies and some short local patterns; it has not learned word
+structure at this budget. That is what 0.0067% of an epoch buys, and it is why
+this experiment says nothing yet about the architecture's language ability.
+
+### Overfitting and repetition
+
+- **Measured:** train/val gap at the end of the run is +0.0022 (train 3.196237
+  vs val 3.198449) - no obvious overfitting signal, as expected this early.
+- Caveat: only two validation points exist (start and end), so this is not a
+  held-out learning curve; it is a check that validation loss did not diverge
+  from training loss.
+- **Measured:** sampled text shows no n-gram looping (distinct 8-gram ratio 1.0,
+  longest repeated substring 3-5 characters).
+- **Measured:** greedy decoding (temperature 0) collapses to the single most
+  probable token, emitting 128 spaces after the prompt.
+- **Interpretation:** the greedy collapse is the usual low-entropy failure of an
+  under-trained character model rather than a scheduling or gradient bug; the
+  metrics file shows no NaN or unstable gradient norms (quadratic 71.7, linear
+  265.2, other 256.5 at step 10, all finite through step 500).
+- Samples contain non-ASCII characters (e.g. emoji, CJK) because the corpus
+  character vocabulary itself contains them; they are valid tokens, not
+  corruption.
+
+### Reproducibility
+
+- seed 1; the model is initialized by the deterministic C++-matching
+  `init_like_cpp(seed)`, the data pipeline is unshuffled and deterministic, and
+  the trainer writes one metrics row per 10 steps.
+- commands run from the repo root (the first does everything, the second only
+  rebuilds evaluation, samples and report from the saved checkpoint):
+
+```
+python python/research/experiment_001.py
+python python/research/experiment_001.py --post-only --run-log runs/experiment_001_run.log
+```
+
+- the driver calls `research.trainer.Trainer.run` with the same values the CLI
+  exposes as `--epochs 1 --max-steps-per-epoch 500 --max-valid-batches 256`; the
+  model, trainer, optimizer, scheduler and data code are unmodified.
+- artifacts (git-ignored) in `runs/experiment_001/`:
+  `baseline_untrained.pt`, `baseline_eval.json`, `metrics.jsonl` (one row per 10
+  steps plus the epoch row), `checkpoint_epoch1.pt`, `checkpoint_final.pt`,
+  `final_eval.json`, `generations.json` (all samples and settings),
+  `report.json`, `report.md` (human-readable report). Run logs:
+  `runs/experiment_001_run.log`, `runs/experiment_001_post.log`.
+
 ## Notes
 
 My plan is to make this *exactly* the same as a transformer just with squarewise FFN. So still some Re/GeLu, attention, etc.
