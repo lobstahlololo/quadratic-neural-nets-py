@@ -125,6 +125,7 @@ def main(argv=None):
         max_steps_per_epoch=args.max_steps_per_epoch,
         max_valid_batches=args.max_valid_batches,
         resume_path=args.resume,
+        steps_per_epoch=sps,
     )
     print(f"[done] metrics={metrics_path} checkpoint={final_ckpt}")
 

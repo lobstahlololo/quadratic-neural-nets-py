@@ -16,8 +16,8 @@ Reproduces documentation/example_transformer.cpp windowing exactly:
     `steps_per_epoch = training_data.size() / total_input_rows`.
 
 Memory: the 1.9 GB train corpus is never loaded whole. Windows are emitted
-from a sliding buffer that holds at most ~stride+S+chunk_size token ids, and
-batches are assembled batch_size windows at a time.
+from a sliding buffer that holds at most ~chunk_size + COMPACTION_THRESHOLD
+token ids, and batches are assembled batch_size windows at a time.
 """
 
 from __future__ import annotations
@@ -28,6 +28,13 @@ import sys
 import numpy as np
 
 from .tokenizer import build_tokenizer, DEFAULT_CHUNK_SIZE
+
+# The window iterator keeps a read cursor into its token buffer instead of
+# dropping consumed tokens after every window. Deleting from the front of a
+# list that holds a whole 8 MiB chunk costs a full memmove per window (~9 ms
+# for 8M ids, i.e. ~75 ms per batch of 8 windows); compacting only once every
+# COMPACTION_THRESHOLD consumed tokens makes that cost amortically free.
+COMPACTION_THRESHOLD = 1 << 20
 
 
 def num_windows(token_count, seq_len, stride):
@@ -92,9 +99,10 @@ def iter_windows(path, tokenizer, seq_len, stride, chunk_size=DEFAULT_CHUNK_SIZE
     last_pct = -1
     label = "windowizing {}".format(os.path.basename(path))
 
-    buffer = []          # token ids, stream positions [stream_pos, stream_pos+len)
-    stream_pos = 0       # absolute index of buffer[0]
+    buffer = []          # token ids, stream positions [buffer_start, +len(buffer))
+    buffer_start = 0     # absolute stream position of buffer[0]
     next_p = 0           # next window start position to emit
+    consumed = 0         # tokens at the front of `buffer` already passed by next_p
 
     def cb(read, total_bytes=total_bytes):
         nonlocal last_pct
@@ -109,16 +117,20 @@ def iter_windows(path, tokenizer, seq_len, stride, chunk_size=DEFAULT_CHUNK_SIZE
     for chunk in _stream(path, tokenizer, chunk_size, cb):
         buffer.extend(chunk)
         # emit every window start p whose last target token (p+seq_len) exists
-        while next_p + seq_len < stream_pos + len(buffer):
-            off = next_p - stream_pos
+        while next_p + seq_len < buffer_start + len(buffer):
+            off = next_p - buffer_start
             inputs = np.asarray(buffer[off:off + seq_len], dtype=np.int64)
             targets = np.asarray(buffer[off + 1:off + seq_len + 1], dtype=np.int64)
             yield inputs, targets
             next_p += stride
-            drop = next_p - stream_pos
-            if drop > 0:
-                del buffer[:drop]
-                stream_pos += drop
+            # Consumed tokens stay in place until they are worth one memmove:
+            # deleting from the front of a chunk-sized list per window is the
+            # single most expensive thing in the whole pipeline.
+            consumed = next_p - buffer_start
+            if consumed >= COMPACTION_THRESHOLD:
+                del buffer[:consumed]
+                buffer_start += consumed
+                consumed = 0
     if progress and total_bytes > 0:
         sys.stderr.write("\n")
         sys.stderr.flush()

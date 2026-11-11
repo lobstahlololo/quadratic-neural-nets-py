@@ -48,6 +48,10 @@ def seed_everything(seed):
 
 ONE_MINUS_7 = 1e-7
 
+# Activation magnitudes written to metrics.jsonl. Only these intermediates are
+# reduced: they were the only keys the metrics row ever used.
+METRIC_ACTIVATIONS = ("embedding", "final_norm", "logits")
+
 
 def reported_loss(probs, targets):
     """C++ reported loss: mean over rows of -log(p_target + 1e-7).
@@ -91,9 +95,15 @@ class Trainer:
             self.config.window_stride, self.config.batch_size,
             progress=False)[0]
 
-    def prepare(self, train_path):
-        """Compute steps_per_epoch and (re)create optimizer + scheduler."""
-        sps = self._sps(train_path)
+    def prepare(self, train_path, steps_per_epoch=None):
+        """Compute steps_per_epoch and (re)create optimizer + scheduler.
+
+        ``steps_per_epoch`` lets the caller pass a count it already computed:
+        counting the corpus is a full streaming pass over the ~1.9 GB train
+        file (~5 minutes), so doing it twice delays the first optimizer step
+        by that much.
+        """
+        sps = steps_per_epoch if steps_per_epoch else self._sps(train_path)
         self.scheduler = CosineScheduler(
             sps, self.config.learning_rate, self.config.min_learning_rate)
         self.optimizer = make_optimizer(
@@ -107,7 +117,11 @@ class Trainer:
         x = torch.from_numpy(inputs).to(self.device)
         y = torch.from_numpy(targets).to(self.device)
         self.optimizer.zero_grad(set_to_none=True)
-        logits = self.model.forward(x)
+        # ONE forward pass: forward() is forward_debug()["logits"], so run the
+        # debug variant directly and reuse its probs/activations instead of
+        # paying a second full forward pass for per-step logging.
+        debug = self.model.forward_debug(x)
+        logits = debug["logits"]
         # gradient loss: SUM-reduced CE (C++ per-token gradient sum)
         loss_sum = F.cross_entropy(logits.reshape(-1, logits.shape[-1]),
                                    y.reshape(-1), reduction="sum")
@@ -115,8 +129,10 @@ class Trainer:
         if max_grad_norm:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_grad_norm)
         self.optimizer.step()
-        probs = torch.softmax(logits, dim=-1)
-        return reported_loss(probs, y), loss_sum.item()
+        # logits are untouched by the optimizer step, so the probs the debug
+        # pass already computed are identical to a fresh softmax.
+        return (reported_loss(debug["probs"], y), loss_sum.item(),
+                self._activation_magnitudes(debug=debug))
 
     def _validate(self, valid_path, max_batches=0):
         """Mean reported loss over validation batches (no gradient)."""
@@ -139,20 +155,22 @@ class Trainer:
         self.model.train()
         return float(np.mean(losses)) if losses else float("nan")
 
-    def _activation_magnitudes(self, inputs):
-        """Mean |activation| of key intermediates for the current batch."""
-        x = torch.from_numpy(inputs).to(self.device)
-        with torch.no_grad():
-            out = self.model.forward_debug(x)
-        mags = {}
-        for k, v in out.items():
-            if isinstance(v, torch.Tensor):
-                mags[k] = float(v.abs().mean())
-        return mags
+    def _activation_magnitudes(self, debug=None, inputs=None):
+        """Mean |activation| of the logged intermediates.
+
+        Pass ``debug`` (the dict already produced by the training forward pass)
+        to avoid a second forward; ``inputs`` still works standalone.
+        """
+        if debug is None:
+            x = torch.from_numpy(inputs).to(self.device)
+            with torch.no_grad():
+                debug = self.model.forward_debug(x)
+        return {k: float(debug[k].detach().abs().mean())
+                for k in METRIC_ACTIVATIONS if k in debug}
 
     def run(self, train_path, valid_path=None, epochs=None, log_interval=1,
             checkpoint_dir=None, epochs_per_checkpoint=1, max_steps_per_epoch=0,
-            max_valid_batches=0, resume_path=None):
+            max_valid_batches=0, resume_path=None, steps_per_epoch=None):
         """Full training loop; returns (metrics_path, final_checkpoint_path)."""
         epochs = epochs if epochs is not None else self.config.epochs
         log_interval = log_interval or self.config.log_interval
@@ -164,7 +182,7 @@ class Trainer:
         # compute steps_per_epoch and create the optimizer (needed before
         # any checkpoint can be loaded into it)
         if self.optimizer is None:
-            self.prepare(train_path)
+            self.prepare(train_path, steps_per_epoch=steps_per_epoch)
         if resume_path:
             global_step, epoch, cfg_dict, extra = load_checkpoint(
                 resume_path, self.model, self.optimizer, self.scheduler,
@@ -204,11 +222,11 @@ class Trainer:
                 self.optimizer.param_groups[0]["lr"] = base
                 if len(self.optimizer.param_groups) > 1:
                     self.optimizer.param_groups[1]["lr"] = q * base
-                tr_loss, sum_loss = self._train_batch(inputs, targets)
+                tr_loss, sum_loss, acts = self._train_batch(inputs, targets)
                 self.global_step += 1
                 epoch_losses.append(tr_loss)
                 if (self.global_step % log_interval == 0):
-                    self._log_step(metrics, j, lr_now, tr_loss, sum_loss, inputs)
+                    self._log_step(metrics, j, lr_now, tr_loss, sum_loss, acts)
             # -- end of epoch --
             self.epoch = epoch + 1
             avg = float(np.mean(epoch_losses)) if epoch_losses else float("nan")
@@ -232,7 +250,7 @@ class Trainer:
             self.save(final)
         return os.path.join(checkpoint_dir, "metrics.jsonl") if checkpoint_dir else None, final
 
-    def _log_step(self, metrics, j, lr_now, tr_loss, sum_loss, inputs):
+    def _log_step(self, metrics, j, lr_now, tr_loss, sum_loss, activations):
         # gradient norms (from .grad) classified W_quad / W_lin / other
         g_quad, g_lin, g_other = [], [], []
         for name, p, _, _ in iter_parameters(self.model):
@@ -247,15 +265,13 @@ class Trainer:
                 p_quad.append(p.detach())
             elif cls == "W_lin":
                 p_lin.append(p.detach())
-        activations = self._activation_magnitudes(inputs)
         metrics.write(
             step=self.global_step, epoch=self.epoch, train_loss=tr_loss,
             val_loss=None, learning_rate=lr_now,
             wquad_grad_norm=_norm_of(g_quad), wlin_grad_norm=_norm_of(g_lin),
             other_grad_norm=_norm_of(g_other),
             wquad_param_norm=_norm_of(p_quad), wlin_param_norm=_norm_of(p_lin),
-            activations={k: v for k, v in activations.items()
-                         if k in ("embedding", "final_norm", "logits")},
+            activations=activations,
             sum_ce_loss=sum_loss)
 
     def save(self, path):
